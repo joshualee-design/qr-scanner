@@ -7,12 +7,12 @@
 
   Flow: scan -> full-page redirect to your Apps Script /exec URL to mark
   attendance (required so Cru's login cookie is actually sent — background
-  calls don't carry it) -> Apps Script auto-redirects window.top BACK to this
-  same page after ~0.9s, with the result encoded in the URL (?r=ok&name=...)
-  -> this page reads that, shows a brief banner, cleans the URL, and restarts
-  the camera automatically. So the whole loop needs no manual taps beyond
-  pointing the camera at each code (after the very first "enable camera" tap,
-  which the browser requires once per site).
+  calls don't carry it) -> Apps Script shows a result page with a "Scan Next"
+  link back to this same page (this tap is required — Apps Script's sandboxed
+  iframe blocks an automatic script-triggered redirect back to a real top-level
+  tab, so a genuine tap is unavoidable) -> when you land back here (with
+  ?r=ok&name=... etc in the URL), this page shows a brief banner, cleans the
+  URL, and restarts the camera automatically.
 
   SETUP: replace SCRIPT_EXEC_URL below with your own deployed Apps Script
   web app URL (Deploy > Manage deployments, or menu "Show web app scanner URL"
@@ -113,10 +113,8 @@
 
     // Tries to start the camera without requiring a fresh tap. The browser
     // only insists on a user gesture the FIRST time a site ever asks for
-    // camera permission — once granted, later page loads (including the
-    // auto-return after each scan) can start it silently. If it's ever
-    // refused (first visit, or permission revoked), show a manual "Enable
-    // camera" button so there's still a one-tap way in.
+    // camera permission — once granted, later page loads can start it
+    // silently. If it's ever refused, show a manual "Enable camera" button.
     function startScanner() {
       document.getElementById('enableBox').style.display = 'none';
       showResult('warn', 'Starting camera...');
