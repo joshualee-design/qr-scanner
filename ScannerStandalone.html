@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<!--
+  ScannerStandalone.html — THE REAL SCANNER, hosted externally (GitHub Pages,
+  Netlify, or similar). This is a normal, unrestricted web page, so the phone
+  camera works here (unlike the version served directly by Apps Script, which
+  browsers block from using the camera).
+
+  It talks to your Apps Script backend via JSONP (a <script> tag trick) rather
+  than fetch(), because Apps Script doesn't return the CORS headers a normal
+  fetch() needs — JSONP sidesteps that entirely.
+
+  SETUP: replace SCRIPT_EXEC_URL below with your own deployed Apps Script
+  web app URL (Deploy > Manage deployments, or menu "Show web app scanner URL"
+  in the sheet). Then upload this single file to your static host as index.html.
+-->
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Event Check-In Scanner</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px; font-family: -apple-system, Arial, sans-serif;
+      background: #111; color: #fff; text-align: center;
+    }
+    h1 { font-size: 18px; margin: 8px 0 16px; font-weight: 600; }
+    #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden; }
+    #result {
+      margin-top: 16px; padding: 20px; border-radius: 12px; font-size: 20px; font-weight: 700;
+      min-height: 60px; display: flex; align-items: center; justify-content: center;
+    }
+    .idle    { background: #222; color: #999; font-size: 14px; font-weight: 400; }
+    .ok      { background: #16a34a; color: #fff; }
+    .warn    { background: #d97706; color: #fff; }
+    .err     { background: #dc2626; color: #fff; }
+    #count { margin-top: 10px; font-size: 13px; color: #999; }
+    #manualToggle { margin-top: 14px; font-size: 13px; color: #6ab7ff; text-decoration: underline; background: none; border: none; }
+    #manualBox { display: none; margin-top: 10px; }
+    #manualBox input {
+      width: 70%; max-width: 280px; padding: 10px; font-size: 15px; border-radius: 8px;
+      border: 1px solid #444; background: #222; color: #fff;
+    }
+    #manualBox button {
+      padding: 10px 14px; font-size: 15px; border-radius: 8px; border: none;
+      background: #2563eb; color: #fff; margin-left: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Scan participant's QR code</h1>
+  <div id="reader"></div>
+  <div id="result" class="idle">Point the camera at a QR code</div>
+  <div id="count">Checked in this session: <span id="sessionCount">0</span></div>
+
+  <button id="manualToggle" onclick="toggleManual()">Camera not working? Type the code instead</button>
+  <div id="manualBox">
+    <input id="manualInput" type="text" placeholder="Paste code" autocapitalize="off" autocorrect="off">
+    <button onclick="submitManual()">Check in</button>
+  </div>
+
+  <script>
+    // ======================= CONFIG — edit this =======================
+    var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
+    // ====================================================================
+
+    var sessionCount = 0;
+    var busy = false;
+
+    function showResult(cls, text) {
+      var el = document.getElementById('result');
+      el.className = cls;
+      el.textContent = text;
+    }
+
+    // JSONP call to the Apps Script backend — avoids CORS issues entirely.
+    function callBackend(token, cb) {
+      var cbName = '__qrcb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      var timeoutId = setTimeout(function () {
+        cleanup();
+        cb(new Error('Timed out contacting server. Check your internet connection.'));
+      }, 15000);
+
+      function cleanup() {
+        clearTimeout(timeoutId);
+        delete window[cbName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      window[cbName] = function (res) {
+        cleanup();
+        cb(null, res);
+      };
+
+      var script = document.createElement('script');
+      script.src = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) + '&callback=' + cbName;
+      script.onerror = function () {
+        cleanup();
+        cb(new Error('Network error contacting server'));
+      };
+      document.body.appendChild(script);
+    }
+
+    function handleToken(token) {
+      if (busy) return;
+      busy = true;
+      showResult('warn', 'Checking...');
+      callBackend(token, function (err, res) {
+        if (err) {
+          showResult('err', err.message);
+        } else if (!res.success) {
+          showResult('err', res.message || 'Not recognized');
+        } else if (res.alreadyChecked) {
+          showResult('warn', res.name + ' — already checked in at ' + res.time);
+        } else {
+          sessionCount++;
+          document.getElementById('sessionCount').textContent = sessionCount;
+          showResult('ok', res.name + ' — PRESENT ✓');
+        }
+        setTimeout(function () {
+          showResult('idle', 'Point the camera at a QR code');
+          busy = false;
+        }, 2000);
+      });
+    }
+
+    function onScanSuccess(decodedText) {
+      handleToken(decodedText);
+    }
+
+    function onScanFailure() {
+      // called continuously while no QR is in view — ignore
+    }
+
+    function toggleManual() {
+      var box = document.getElementById('manualBox');
+      box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+    }
+
+    function submitManual() {
+      var input = document.getElementById('manualInput');
+      var token = input.value.trim();
+      if (!token) return;
+      handleToken(token);
+      input.value = '';
+    }
+
+    var html5QrcodeScanner = new Html5QrcodeScanner(
+      'reader',
+      { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastUsedCamera: true },
+      false
+    );
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+  </script>
+</body>
+</html>
