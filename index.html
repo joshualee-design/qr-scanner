@@ -5,13 +5,14 @@
   camera works here (unlike the version served directly by Apps Script, which
   browsers block from using the camera).
 
-  How it talks to the backend: on a successful scan, this page does a FULL
-  PAGE REDIRECT to your Apps Script /exec URL (not a background fetch/JSONP
-  call). That's deliberate — Cru's Google Workspace requires an authenticated
-  session to reach script.google.com, and that login cookie is only sent on a
-  real top-level navigation, not on a background cross-site request. Apps
-  Script then shows a result page with a "Scan Next" button that navigates
-  back to this page.
+  Flow: scan -> full-page redirect to your Apps Script /exec URL to mark
+  attendance (required so Cru's login cookie is actually sent — background
+  calls don't carry it) -> Apps Script auto-redirects window.top BACK to this
+  same page after ~0.9s, with the result encoded in the URL (?r=ok&name=...)
+  -> this page reads that, shows a brief banner, cleans the URL, and restarts
+  the camera automatically. So the whole loop needs no manual taps beyond
+  pointing the camera at each code (after the very first "enable camera" tap,
+  which the browser requires once per site).
 
   SETUP: replace SCRIPT_EXEC_URL below with your own deployed Apps Script
   web app URL (Deploy > Manage deployments, or menu "Show web app scanner URL"
@@ -37,7 +38,14 @@
       min-height: 60px; display: flex; align-items: center; justify-content: center;
     }
     .idle    { background: #222; color: #999; font-size: 14px; font-weight: 400; }
+    .ok      { background: #16a34a; color: #fff; }
     .warn    { background: #d97706; color: #fff; }
+    .err     { background: #dc2626; color: #fff; }
+    #enableBox { display: none; margin-top: 16px; }
+    #enableBox button {
+      padding: 14px 28px; font-size: 16px; font-weight: 600; border-radius: 8px;
+      border: none; background: #2563eb; color: #fff;
+    }
     #manualToggle { margin-top: 14px; font-size: 13px; color: #6ab7ff; text-decoration: underline; background: none; border: none; }
     #manualBox { display: none; margin-top: 10px; }
     #manualBox input {
@@ -53,7 +61,10 @@
 <body>
   <h1>Scan participant's QR code</h1>
   <div id="reader"></div>
-  <div id="result" class="idle">Point the camera at a QR code</div>
+  <div id="result" class="idle">Starting camera...</div>
+  <div id="enableBox">
+    <button onclick="startScanner()">Enable camera</button>
+  </div>
 
   <button id="manualToggle" onclick="toggleManual()">Camera not working? Type the code instead</button>
   <div id="manualBox">
@@ -67,6 +78,7 @@
     // ====================================================================
 
     var busy = false;
+    var html5Qrcode = null;
 
     function showResult(cls, text) {
       var el = document.getElementById('result');
@@ -77,11 +89,18 @@
     function goMark(token) {
       if (busy) return;
       busy = true;
-      showResult('warn', 'Opening check-in...');
+      showResult('warn', 'Checking...');
       var returnUrl = window.location.href.split('?')[0].split('#')[0];
-      window.location.href = SCRIPT_EXEC_URL +
+      var target = SCRIPT_EXEC_URL +
         '?action=mark&token=' + encodeURIComponent(token) +
         '&return=' + encodeURIComponent(returnUrl);
+      if (html5Qrcode) {
+        html5Qrcode.stop().catch(function () {}).then(function () {
+          window.location.href = target;
+        });
+      } else {
+        window.location.href = target;
+      }
     }
 
     function onScanSuccess(decodedText) {
@@ -90,6 +109,29 @@
 
     function onScanFailure() {
       // called continuously while no QR is in view — ignore
+    }
+
+    // Tries to start the camera without requiring a fresh tap. The browser
+    // only insists on a user gesture the FIRST time a site ever asks for
+    // camera permission — once granted, later page loads (including the
+    // auto-return after each scan) can start it silently. If it's ever
+    // refused (first visit, or permission revoked), show a manual "Enable
+    // camera" button so there's still a one-tap way in.
+    function startScanner() {
+      document.getElementById('enableBox').style.display = 'none';
+      showResult('warn', 'Starting camera...');
+      html5Qrcode = new Html5Qrcode('reader');
+      html5Qrcode.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        onScanSuccess,
+        onScanFailure
+      ).then(function () {
+        showResult('idle', 'Point the camera at a QR code');
+      }).catch(function (err) {
+        showResult('err', 'Camera unavailable — tap below');
+        document.getElementById('enableBox').style.display = 'block';
+      });
     }
 
     function toggleManual() {
@@ -104,12 +146,30 @@
       goMark(token);
     }
 
-    var html5QrcodeScanner = new Html5QrcodeScanner(
-      'reader',
-      { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastUsedCamera: true },
-      false
-    );
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    // On load, check whether we just came back from a mark-attendance
+    // redirect (?r=ok/warn/err&...). If so, show that result briefly, clean
+    // the URL, then start (or restart) the camera.
+    (function init() {
+      var params = new URLSearchParams(window.location.search);
+      var r = params.get('r');
+      if (r) {
+        if (r === 'ok') {
+          showResult('ok', (params.get('name') || '') + ' — PRESENT ✓');
+        } else if (r === 'warn') {
+          showResult('warn', (params.get('name') || '') + ' — already checked in at ' + (params.get('time') || ''));
+        } else {
+          showResult('err', params.get('msg') || 'Not recognized');
+        }
+        // Clean the URL so refreshing/bookmarking doesn't replay the old result.
+        history.replaceState(null, '', window.location.pathname);
+        setTimeout(function () {
+          busy = false;
+          startScanner();
+        }, 1400);
+      } else {
+        startScanner();
+      }
+    })();
   </script>
 </body>
 </html>
