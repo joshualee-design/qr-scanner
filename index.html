@@ -1,215 +1,168 @@
 <!DOCTYPE html>
-<!--
-  ScannerStandalone.html — THE REAL SCANNER, hosted externally (GitHub Pages,
-  Netlify, or similar). This is a normal, unrestricted web page, so the phone
-  camera works here (unlike the version served directly by Apps Script, which
-  browsers block from using the camera).
-
-  Flow: scan -> full-page redirect to your Apps Script /exec URL to mark
-  attendance (required so Cru's login cookie is actually sent — background
-  calls don't carry it) -> Apps Script shows a result page with a "Scan Next"
-  link back to this same page (this tap is required — Apps Script's sandboxed
-  iframe blocks an automatic script-triggered redirect back to a real top-level
-  tab, so a genuine tap is unavoidable) -> when you land back here (with
-  ?r=ok&name=... etc in the URL), this page shows a brief banner (+ speaks a
-  short announcement on a successful check-in), cleans the URL, and restarts
-  the camera automatically.
-
-  SETUP: replace SCRIPT_EXEC_URL below with your own deployed Apps Script
-  web app URL (Deploy > Manage deployments, or menu "Show web app scanner URL"
-  in the sheet). Then upload this single file to your static host as index.html.
-
-  NOTE on voice announcements: uses the browser's built-in Web Speech API
-  (SpeechSynthesis) — no external service, works offline. iOS Safari can be
-  strict about playing audio automatically right after a page load (the same
-  category of restriction behind the camera/iframe issues elsewhere in this
-  system) — it may work reliably on Android but occasionally stay silent on
-  iPhone; the on-screen text always still shows either way. Also make sure the
-  phone's physical ringer switch isn't set to silent, since iOS mutes this
-  kind of audio when it is.
--->
 <html>
 <head>
-  <base target="_top">
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-  <title>Event Check-In Scanner</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; padding: 16px; font-family: -apple-system, Arial, sans-serif;
-      background: #111; color: #fff; text-align: center;
-    }
-    h1 { font-size: 18px; margin: 8px 0 16px; font-weight: 600; }
-    #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden; }
-    #result {
-      margin-top: 16px; padding: 20px; border-radius: 12px; font-size: 20px; font-weight: 700;
-      min-height: 60px; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    }
-    .idle    { background: #222; color: #999; font-size: 14px; font-weight: 400; }
-    .ok      { background: #16a34a; color: #fff; }
-    .warn    { background: #d97706; color: #fff; }
-    .err     { background: #dc2626; color: #fff; }
-    #enableBox { display: none; margin-top: 16px; }
-    #enableBox button {
-      padding: 14px 28px; font-size: 16px; font-weight: 600; border-radius: 8px;
-      border: none; background: #2563eb; color: #fff;
-    }
-    #manualToggle { margin-top: 14px; font-size: 13px; color: #6ab7ff; text-decoration: underline; background: none; border: none; }
-    #manualBox { display: none; margin-top: 10px; }
-    #manualBox input {
-      width: 70%; max-width: 280px; padding: 10px; font-size: 15px; border-radius: 8px;
-      border: 1px solid #444; background: #222; color: #fff;
-    }
-    #manualBox button {
-      padding: 10px 14px; font-size: 15px; border-radius: 8px; border: none;
-      background: #2563eb; color: #fff; margin-left: 6px;
-    }
-  </style>
+<meta charset="utf-8">
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Event Check-In Scanner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<style>
+  body{margin:0;padding:16px;font-family:-apple-system,Arial,sans-serif;background:#111;color:#fff;text-align:center;}
+  h1{font-size:18px;margin:0 0 12px;}
+  #reader{width:100%;max-width:420px;margin:0 auto;border-radius:12px;overflow:hidden;}
+  #result{max-width:420px;margin:16px auto 0;padding:18px;border-radius:12px;font-size:20px;font-weight:700;min-height:24px;}
+  .idle{background:#222;color:#999;font-weight:400;font-size:14px;}
+  .ok{background:#16a34a;}
+  .warn{background:#d97706;}
+  .err{background:#dc2626;}
+  .subtext{font-size:14px;font-weight:400;margin-top:8px;}
+  #speakBtn{display:inline-block;margin-top:14px;padding:10px 18px;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;}
+  #enableBox{display:none;margin-top:16px;}
+  #enableBox button{padding:12px 22px;font-size:15px;font-weight:600;border-radius:8px;border:none;background:#2563eb;color:#fff;}
+  #manualToggle{margin-top:18px;background:none;border:none;color:#6ab7ff;font-size:13px;text-decoration:underline;}
+  #manualBox{display:none;max-width:420px;margin:12px auto 0;}
+  #manualBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
+  #manualBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
+</style>
 </head>
 <body>
-  <h1>Scan participant's QR code</h1>
+  <h1>Event Check-In Scanner</h1>
   <div id="reader"></div>
-  <div id="result" class="idle">Starting camera...</div>
+  <div id="result" class="idle">Point the camera at a participant's QR code.</div>
   <div id="enableBox">
     <button onclick="startScanner()">Enable camera</button>
   </div>
-
-  <button id="manualToggle" onclick="toggleManual()">Camera not working? Type the code instead</button>
+  <button id="manualToggle" onclick="toggleManual()">Type code manually instead</button>
   <div id="manualBox">
-    <input id="manualInput" type="text" placeholder="Paste code" autocapitalize="off" autocorrect="off">
+    <input id="manualInput" type="text" placeholder="Paste or type the code">
     <button onclick="submitManual()">Check in</button>
   </div>
 
-  <script>
-    // ======================= CONFIG — edit this =======================
-    var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
-    var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
-    // ====================================================================
+<script>
+  // ---- CONFIG: update this if the Apps Script backend is redeployed ----
+  var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
+  var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
 
-    var busy = false;
-    var html5Qrcode = null;
+  var busy = false;
+  var html5Qrcode = null;
 
-    function showResult(cls, text) {
-      var el = document.getElementById('result');
-      el.className = cls;
-      el.innerHTML = '';
-      el.textContent = text;
-    }
+  function showResult(cls, text) {
+    var el = document.getElementById('result');
+    el.className = cls;
+    el.innerHTML = text;
+  }
 
-    // Two-line version used for a successful check-in: bold name/status line,
-    // plus the announcement text underneath.
-    function showSuccess(name) {
-      var el = document.getElementById('result');
-      el.className = 'ok';
-      el.innerHTML = '';
-      var line1 = document.createElement('div');
-      line1.textContent = (name || '') + ' — PRESENT ✓';
-      var line2 = document.createElement('div');
-      line2.style.fontSize = '14px';
-      line2.style.fontWeight = '400';
-      line2.style.marginTop = '6px';
-      line2.textContent = SUCCESS_ANNOUNCEMENT;
-      el.appendChild(line1);
-      el.appendChild(line2);
-    }
+  function showSuccess(name) {
+    var el = document.getElementById('result');
+    el.className = 'ok';
+    el.innerHTML =
+      (name ? escapeHtml(name) + ' — PRESENT ✓' : 'PRESENT ✓') +
+      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>' +
+      '<button id="speakBtn" onclick="speak(SUCCESS_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+  }
 
-    function speak(text) {
-      try {
-        if (!window.speechSynthesis) return;
-        window.speechSynthesis.cancel(); // stop any previous utterance first
-        var utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 1;
-        window.speechSynthesis.speak(utter);
-      } catch (e) { /* voice is a nice-to-have — ignore failures silently */ }
-    }
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
 
-    function goMark(token) {
-      if (busy) return;
-      busy = true;
-      showResult('warn', 'Checking...');
-      var returnUrl = window.location.href.split('?')[0].split('#')[0];
-      var target = SCRIPT_EXEC_URL +
-        '?action=mark&token=' + encodeURIComponent(token) +
-        '&return=' + encodeURIComponent(returnUrl);
-      if (html5Qrcode) {
-        html5Qrcode.stop().catch(function () {}).then(function () {
-          window.location.href = target;
-        });
-      } else {
-        window.location.href = target;
-      }
-    }
+  // Best-effort automatic voice. This works reliably on most Android phones.
+  // On iPhone, iOS only allows the Web Speech API to actually make sound
+  // when the speak() call happens directly inside a real tap/click handler
+  // — a call fired automatically as a page loads (even if that page load
+  // followed a link tap) is silently blocked by iOS. That's why the visible
+  // "🔊 Tap to hear announcement" button above always works: tapping it IS
+  // a direct user gesture. Organisers on iPhone can just tap it once per
+  // scan if they want the voice too; the on-screen message always shows
+  // either way.
+  function speak(text) {
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignore — visual message still shown */ }
+  }
 
-    function onScanSuccess(decodedText) {
-      goMark(decodedText);
-    }
+  function stopCameraSafely() {
+    try {
+      if (html5Qrcode) { html5Qrcode.stop().catch(function () {}); }
+    } catch (e) {}
+  }
 
-    function onScanFailure() {
-      // called continuously while no QR is in view — ignore
-    }
+  function goMark(token) {
+    if (busy) return;
+    busy = true;
+    showResult('idle', 'Checking...');
+    var returnUrl = window.location.origin + window.location.pathname;
+    stopCameraSafely();
+    var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) + '&return=' + encodeURIComponent(returnUrl);
+    window.location.href = url;
+  }
 
-    // Tries to start the camera without requiring a fresh tap. The browser
-    // only insists on a user gesture the FIRST time a site ever asks for
-    // camera permission — once granted, later page loads can start it
-    // silently. If it's ever refused, show a manual "Enable camera" button.
-    function startScanner() {
-      document.getElementById('enableBox').style.display = 'none';
-      showResult('warn', 'Starting camera...');
+  function startScanner() {
+    document.getElementById('enableBox').style.display = 'none';
+    try {
       html5Qrcode = new Html5Qrcode('reader');
       html5Qrcode.start(
         { facingMode: 'environment' },
         { fps: 10, qrbox: { width: 250, height: 250 } },
-        onScanSuccess,
-        onScanFailure
-      ).then(function () {
-        showResult('idle', 'Point the camera at a QR code');
-      }).catch(function (err) {
+        function onScanSuccess(decodedText) {
+          goMark(decodedText);
+        },
+        function onScanFailure() { /* ignore per-frame no-match */ }
+      ).catch(function (err) {
         showResult('err', 'Camera unavailable — tap below');
         document.getElementById('enableBox').style.display = 'block';
       });
+    } catch (err) {
+      showResult('err', 'Camera unavailable — tap below');
+      document.getElementById('enableBox').style.display = 'block';
+    }
+  }
+
+  function toggleManual() {
+    var box = document.getElementById('manualBox');
+    box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+  }
+
+  function submitManual() {
+    var val = document.getElementById('manualInput').value.trim();
+    if (!val) return;
+    goMark(val);
+  }
+
+  (function init() {
+    var params = new URLSearchParams(window.location.search);
+    var r = params.get('r');
+
+    if (r === 'ok') {
+      var name = params.get('name') || '';
+      showSuccess(name);
+      speak(SUCCESS_ANNOUNCEMENT); // best-effort; see note in speak()
+    } else if (r === 'warn') {
+      var wName = params.get('name') || '';
+      var wTime = params.get('time') || '';
+      showResult('warn', escapeHtml(wName) + ' — already checked in at ' + escapeHtml(wTime));
+    } else if (r === 'err') {
+      var msg = params.get('msg') || 'Not recognized';
+      showResult('err', escapeHtml(msg));
     }
 
-    function toggleManual() {
-      var box = document.getElementById('manualBox');
-      box.style.display = (box.style.display === 'block') ? 'none' : 'block';
+    // Clean the URL so a refresh doesn't re-show the old result.
+    if (r) {
+      history.replaceState(null, '', window.location.pathname);
     }
 
-    function submitManual() {
-      var input = document.getElementById('manualInput');
-      var token = input.value.trim();
-      if (!token) return;
-      goMark(token);
-    }
-
-    // On load, check whether we just came back from a mark-attendance
-    // redirect (?r=ok/warn/err&...). If so, show that result briefly (and
-    // speak it, for a successful check-in), clean the URL, then start (or
-    // restart) the camera.
-    (function init() {
-      var params = new URLSearchParams(window.location.search);
-      var r = params.get('r');
-      if (r) {
-        if (r === 'ok') {
-          var name = params.get('name') || '';
-          showSuccess(name);
-          speak(SUCCESS_ANNOUNCEMENT);
-        } else if (r === 'warn') {
-          showResult('warn', (params.get('name') || '') + ' — already checked in at ' + (params.get('time') || ''));
-        } else {
-          showResult('err', params.get('msg') || 'Not recognized');
-        }
-        // Clean the URL so refreshing/bookmarking doesn't replay the old result.
-        history.replaceState(null, '', window.location.pathname);
-        setTimeout(function () {
-          busy = false;
-          startScanner();
-        }, 1800);
-      } else {
-        startScanner();
-      }
-    })();
-  </script>
+    // Give the result a moment to be read, then restart the camera for the
+    // next scan (requires one tap only the very first time camera access is
+    // granted on this device — after that, restarting like this works
+    // without a fresh permission prompt).
+    setTimeout(function () {
+      busy = false;
+      startScanner();
+    }, r ? 1800 : 0);
+  })();
+</script>
 </body>
 </html>
