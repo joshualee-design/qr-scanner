@@ -11,12 +11,22 @@
   link back to this same page (this tap is required — Apps Script's sandboxed
   iframe blocks an automatic script-triggered redirect back to a real top-level
   tab, so a genuine tap is unavoidable) -> when you land back here (with
-  ?r=ok&name=... etc in the URL), this page shows a brief banner, cleans the
-  URL, and restarts the camera automatically.
+  ?r=ok&name=... etc in the URL), this page shows a brief banner (+ speaks a
+  short announcement on a successful check-in), cleans the URL, and restarts
+  the camera automatically.
 
   SETUP: replace SCRIPT_EXEC_URL below with your own deployed Apps Script
   web app URL (Deploy > Manage deployments, or menu "Show web app scanner URL"
   in the sheet). Then upload this single file to your static host as index.html.
+
+  NOTE on voice announcements: uses the browser's built-in Web Speech API
+  (SpeechSynthesis) — no external service, works offline. iOS Safari can be
+  strict about playing audio automatically right after a page load (the same
+  category of restriction behind the camera/iframe issues elsewhere in this
+  system) — it may work reliably on Android but occasionally stay silent on
+  iPhone; the on-screen text always still shows either way. Also make sure the
+  phone's physical ringer switch isn't set to silent, since iOS mutes this
+  kind of audio when it is.
 -->
 <html>
 <head>
@@ -35,7 +45,7 @@
     #reader { width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden; }
     #result {
       margin-top: 16px; padding: 20px; border-radius: 12px; font-size: 20px; font-weight: 700;
-      min-height: 60px; display: flex; align-items: center; justify-content: center;
+      min-height: 60px; display: flex; flex-direction: column; align-items: center; justify-content: center;
     }
     .idle    { background: #222; color: #999; font-size: 14px; font-weight: 400; }
     .ok      { background: #16a34a; color: #fff; }
@@ -75,6 +85,7 @@
   <script>
     // ======================= CONFIG — edit this =======================
     var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
+    var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
     // ====================================================================
 
     var busy = false;
@@ -83,7 +94,35 @@
     function showResult(cls, text) {
       var el = document.getElementById('result');
       el.className = cls;
+      el.innerHTML = '';
       el.textContent = text;
+    }
+
+    // Two-line version used for a successful check-in: bold name/status line,
+    // plus the announcement text underneath.
+    function showSuccess(name) {
+      var el = document.getElementById('result');
+      el.className = 'ok';
+      el.innerHTML = '';
+      var line1 = document.createElement('div');
+      line1.textContent = (name || '') + ' — PRESENT ✓';
+      var line2 = document.createElement('div');
+      line2.style.fontSize = '14px';
+      line2.style.fontWeight = '400';
+      line2.style.marginTop = '6px';
+      line2.textContent = SUCCESS_ANNOUNCEMENT;
+      el.appendChild(line1);
+      el.appendChild(line2);
+    }
+
+    function speak(text) {
+      try {
+        if (!window.speechSynthesis) return;
+        window.speechSynthesis.cancel(); // stop any previous utterance first
+        var utter = new SpeechSynthesisUtterance(text);
+        utter.rate = 1;
+        window.speechSynthesis.speak(utter);
+      } catch (e) { /* voice is a nice-to-have — ignore failures silently */ }
     }
 
     function goMark(token) {
@@ -145,14 +184,17 @@
     }
 
     // On load, check whether we just came back from a mark-attendance
-    // redirect (?r=ok/warn/err&...). If so, show that result briefly, clean
-    // the URL, then start (or restart) the camera.
+    // redirect (?r=ok/warn/err&...). If so, show that result briefly (and
+    // speak it, for a successful check-in), clean the URL, then start (or
+    // restart) the camera.
     (function init() {
       var params = new URLSearchParams(window.location.search);
       var r = params.get('r');
       if (r) {
         if (r === 'ok') {
-          showResult('ok', (params.get('name') || '') + ' — PRESENT ✓');
+          var name = params.get('name') || '';
+          showSuccess(name);
+          speak(SUCCESS_ANNOUNCEMENT);
         } else if (r === 'warn') {
           showResult('warn', (params.get('name') || '') + ' — already checked in at ' + (params.get('time') || ''));
         } else {
@@ -163,7 +205,7 @@
         setTimeout(function () {
           busy = false;
           startScanner();
-        }, 1400);
+        }, 1800);
       } else {
         startScanner();
       }
