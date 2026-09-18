@@ -42,6 +42,7 @@
   // ---- CONFIG: update this if the Apps Script backend is redeployed ----
   var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
   var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
+  var WARN_ANNOUNCEMENT = 'You have already checked in earlier. Please proceed to the next counter, thank you.';
 
   var busy = false;
   var html5Qrcode = null;
@@ -61,21 +62,28 @@
       '<button id="speakBtn" onclick="speak(SUCCESS_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
   }
 
+  function showAlreadyChecked(name, time) {
+    var el = document.getElementById('result');
+    el.className = 'warn';
+    el.innerHTML =
+      (name ? escapeHtml(name) + ' — already checked in at ' + escapeHtml(time) : 'Already checked in') +
+      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>' +
+      '<button id="speakBtn" onclick="speak(WARN_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+  }
+
   function escapeHtml(s) {
     return String(s || '').replace(/[&<>"]/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
   }
 
-  // Voice is now primarily handled earlier, on the "Scan Next" tap on the
-  // Google-hosted confirmation page (it speaks the announcement using that
-  // real tap as the required user gesture, then navigates back here) — so
-  // by the time this page loads, the announcement has normally already been
-  // heard. This button is kept as a manual replay/backup (e.g. if it was
-  // missed, or reached via the manual code-entry fallback). Picks a female
-  // voice when the device has one available; iOS only allows the Web Speech
-  // API to make sound when speak() runs directly inside a tap/click handler
-  // — which is exactly what tapping this button provides.
+  // Best-effort automatic voice, tried right on page load — works reliably
+  // on most Android phones. On iPhone/iPad, iOS only allows the Web Speech
+  // API to actually make sound when speak() runs directly inside a real
+  // tap/click handler, so the automatic attempt is reliably silent there;
+  // that's why every message also shows a "🔊 Tap to hear announcement"
+  // button, which always works since tapping it is a genuine user gesture.
+  // Picks a female voice when the device has one available.
   function pickFemaleVoice() {
     var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
     var names = ['female','samantha','victoria','karen','moira','tessa','fiona','kate','serena','susan','allison','ava','zoe','nicky','zira','hazel','eva','joanna','salli','kimberly'];
@@ -165,14 +173,12 @@
     if (r === 'ok') {
       var name = params.get('name') || '';
       showSuccess(name);
-      // Not auto-playing here: the voice was already handled on the "Scan
-      // Next" tap on the previous (Google-hosted) confirmation page, using
-      // that tap as the required gesture. The button above is a manual
-      // replay in case it was missed.
+      speak(SUCCESS_ANNOUNCEMENT); // best-effort; works on most Android, silently a no-op on iOS (tap the button instead)
     } else if (r === 'warn') {
       var wName = params.get('name') || '';
       var wTime = params.get('time') || '';
-      showResult('warn', escapeHtml(wName) + ' — already checked in at ' + escapeHtml(wTime));
+      showAlreadyChecked(wName, wTime);
+      speak(WARN_ANNOUNCEMENT); // best-effort; see note above
     } else if (r === 'err') {
       var msg = params.get('msg') || 'Not recognized';
       showResult('err', escapeHtml(msg));
