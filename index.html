@@ -67,22 +67,48 @@
     });
   }
 
-  // Best-effort automatic voice. This works reliably on most Android phones.
-  // On iPhone, iOS only allows the Web Speech API to actually make sound
-  // when the speak() call happens directly inside a real tap/click handler
-  // — a call fired automatically as a page loads (even if that page load
-  // followed a link tap) is silently blocked by iOS. That's why the visible
-  // "🔊 Tap to hear announcement" button above always works: tapping it IS
-  // a direct user gesture. Organisers on iPhone can just tap it once per
-  // scan if they want the voice too; the on-screen message always shows
-  // either way.
+  // Voice is now primarily handled earlier, on the "Scan Next" tap on the
+  // Google-hosted confirmation page (it speaks the announcement using that
+  // real tap as the required user gesture, then navigates back here) — so
+  // by the time this page loads, the announcement has normally already been
+  // heard. This button is kept as a manual replay/backup (e.g. if it was
+  // missed, or reached via the manual code-entry fallback). Picks a female
+  // voice when the device has one available; iOS only allows the Web Speech
+  // API to make sound when speak() runs directly inside a tap/click handler
+  // — which is exactly what tapping this button provides.
+  function pickFemaleVoice() {
+    var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+    var names = ['female','samantha','victoria','karen','moira','tessa','fiona','kate','serena','susan','allison','ava','zoe','nicky','zira','hazel','eva','joanna','salli','kimberly'];
+    for (var i = 0; i < vs.length; i++) {
+      var n = (vs[i].name || '').toLowerCase();
+      for (var j = 0; j < names.length; j++) {
+        if (n.indexOf(names[j]) > -1) return vs[i];
+      }
+    }
+    for (var i = 0; i < vs.length; i++) {
+      if (/^en/i.test(vs[i].lang)) return vs[i];
+    }
+    return null;
+  }
+
   function speak(text) {
     try {
       window.speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(text);
+      var v = pickFemaleVoice();
+      if (v) u.voice = v;
       window.speechSynthesis.speak(u);
     } catch (e) { /* ignore — visual message still shown */ }
   }
+
+  // Warm up the voice list early so it's more likely to be ready by the
+  // time speak() is actually called.
+  try {
+    window.speechSynthesis.getVoices();
+    if ('onvoiceschanged' in window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = function () {};
+    }
+  } catch (e) {}
 
   function stopCameraSafely() {
     try {
@@ -139,7 +165,10 @@
     if (r === 'ok') {
       var name = params.get('name') || '';
       showSuccess(name);
-      speak(SUCCESS_ANNOUNCEMENT); // best-effort; see note in speak()
+      // Not auto-playing here: the voice was already handled on the "Scan
+      // Next" tap on the previous (Google-hosted) confirmation page, using
+      // that tap as the required gesture. The button above is a manual
+      // replay in case it was missed.
     } else if (r === 'warn') {
       var wName = params.get('name') || '';
       var wTime = params.get('time') || '';
