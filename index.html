@@ -16,14 +16,12 @@
   .warn{background:#d97706;}
   .err{background:#dc2626;}
   .subtext{font-size:14px;font-weight:400;margin-top:8px;}
-  #speakBtn{display:inline-block;margin-top:14px;padding:10px 18px;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;}
   #enableBox{display:none;margin-top:16px;}
   #enableBox button{padding:12px 22px;font-size:15px;font-weight:600;border-radius:8px;border:none;background:#2563eb;color:#fff;}
   #manualToggle{margin-top:18px;background:none;border:none;color:#6ab7ff;font-size:13px;text-decoration:underline;}
   #manualBox{display:none;max-width:420px;margin:12px auto 0;}
   #manualBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
   #manualBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
-  #soundBtn{display:none;margin:0 auto 10px;padding:8px 16px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:18px;font-size:13px;}
   #staffBar{max-width:420px;margin:0 auto 12px;font-size:13px;color:#bbb;}
   #staffBar a{color:#6ab7ff;margin-left:6px;}
   #staffBox{display:none;max-width:420px;margin:0 auto 14px;padding:14px;border-radius:12px;background:#1d2b45;text-align:left;}
@@ -40,7 +38,6 @@
     <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
     <button onclick="saveStaff()">Save</button>
   </div>
-  <button id="soundBtn" onclick="unlockSound()">🔊 Tap once to turn on voice</button>
   <div id="reader"></div>
   <div id="result" class="idle">Point the camera at a participant's QR code.</div>
   <div id="enableBox">
@@ -65,7 +62,7 @@
   var FAST_EXEC_URL = '';
 
   // Must match SCAN_KEY in Code.gs (leave '' if Code.gs has none).
-  var SCAN_KEY = '';
+  var SCAN_KEY = 'asf26-k7q2m9';
 
   var SHOW_RESULT_MS = 1500;   // how long the result shows before the next scan is accepted
   var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
@@ -118,8 +115,7 @@
     el.innerHTML =
       (name ? escapeHtml(name) + ' — PRESENT ✓' : 'PRESENT ✓') +
       (regId ? '<div class="subtext">' + escapeHtml(regId) + '</div>' : '') +
-      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>' +
-      '<button id="speakBtn" onclick="speak(SUCCESS_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>';
   }
 
   function showAlreadyChecked(name, time) {
@@ -127,8 +123,7 @@
     el.className = 'warn';
     el.innerHTML =
       (name ? escapeHtml(name) + ' — already checked in at ' + escapeHtml(time) : 'Already checked in') +
-      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>' +
-      '<button id="speakBtn" onclick="speak(WARN_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>';
   }
 
   function escapeHtml(s) {
@@ -136,58 +131,6 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
     });
   }
-
-  // Best-effort automatic voice, tried right on page load — works reliably
-  // on most Android phones. On iPhone/iPad, iOS only allows the Web Speech
-  // API to actually make sound when speak() runs directly inside a real
-  // tap/click handler, so the automatic attempt is reliably silent there;
-  // that's why every message also shows a "🔊 Tap to hear announcement"
-  // button, which always works since tapping it is a genuine user gesture.
-  // Picks a female voice when the device has one available.
-  function pickFemaleVoice() {
-    var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
-    var names = ['female','samantha','victoria','karen','moira','tessa','fiona','kate','serena','susan','allison','ava','zoe','nicky','zira','hazel','eva','joanna','salli','kimberly'];
-    for (var i = 0; i < vs.length; i++) {
-      var n = (vs[i].name || '').toLowerCase();
-      for (var j = 0; j < names.length; j++) {
-        if (n.indexOf(names[j]) > -1) return vs[i];
-      }
-    }
-    for (var i = 0; i < vs.length; i++) {
-      if (/^en/i.test(vs[i].lang)) return vs[i];
-    }
-    return null;
-  }
-
-  // iPhone/iPad only allow speech after one real tap. In fast mode the page
-  // never reloads, so one tap here turns voice on for the whole session.
-  function unlockSound() {
-    try {
-      var u = new SpeechSynthesisUtterance('Voice on');
-      var v = pickFemaleVoice(); if (v) u.voice = v;
-      window.speechSynthesis.speak(u);
-    } catch (e) {}
-    document.getElementById('soundBtn').style.display = 'none';
-  }
-
-  function speak(text) {
-    try {
-      window.speechSynthesis.cancel();
-      var u = new SpeechSynthesisUtterance(text);
-      var v = pickFemaleVoice();
-      if (v) u.voice = v;
-      window.speechSynthesis.speak(u);
-    } catch (e) { /* ignore — visual message still shown */ }
-  }
-
-  // Warm up the voice list early so it's more likely to be ready by the
-  // time speak() is actually called.
-  try {
-    window.speechSynthesis.getVoices();
-    if ('onvoiceschanged' in window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = function () {};
-    }
-  } catch (e) {}
 
   function stopCameraSafely() {
     try {
@@ -239,11 +182,9 @@
     res = res || {};
     if (res.success && res.alreadyChecked) {
       showAlreadyChecked(res.name, res.time);
-      speak(WARN_ANNOUNCEMENT);
       buzz([80, 60, 80]);
     } else if (res.success) {
       showSuccess(res.name, res.regId);
-      speak(SUCCESS_ANNOUNCEMENT);
       buzz(120);
     } else {
       showResult('err', escapeHtml(res.message || 'Not recognized'));
@@ -297,21 +238,16 @@
 
   (function init() {
     renderStaffBar();
-    if (FAST_EXEC_URL && /iP(hone|ad|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
-      document.getElementById('soundBtn').style.display = 'block';
-    }
     var params = new URLSearchParams(window.location.search);
     var r = params.get('r');
 
     if (r === 'ok') {
       var name = params.get('name') || '';
       showSuccess(name);
-      speak(SUCCESS_ANNOUNCEMENT); // best-effort; works on most Android, silently a no-op on iOS (tap the button instead)
     } else if (r === 'warn') {
       var wName = params.get('name') || '';
       var wTime = params.get('time') || '';
       showAlreadyChecked(wName, wTime);
-      speak(WARN_ANNOUNCEMENT); // best-effort; see note above
     } else if (r === 'err') {
       var msg = params.get('msg') || 'Not recognized';
       showResult('err', escapeHtml(msg));
