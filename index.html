@@ -16,12 +16,14 @@
   .warn{background:#d97706;}
   .err{background:#dc2626;}
   .subtext{font-size:14px;font-weight:400;margin-top:8px;}
+  #speakBtn{display:inline-block;margin-top:14px;padding:10px 18px;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;}
   #enableBox{display:none;margin-top:16px;}
   #enableBox button{padding:12px 22px;font-size:15px;font-weight:600;border-radius:8px;border:none;background:#2563eb;color:#fff;}
   #manualToggle{margin-top:18px;background:none;border:none;color:#6ab7ff;font-size:13px;text-decoration:underline;}
   #manualBox{display:none;max-width:420px;margin:12px auto 0;}
   #manualBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
   #manualBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
+  #soundBtn{display:none;margin:0 auto 10px;padding:8px 16px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:18px;font-size:13px;}
   #staffBar{max-width:420px;margin:0 auto 12px;font-size:13px;color:#bbb;}
   #staffBar a{color:#6ab7ff;margin-left:6px;}
   #staffBox{display:none;max-width:420px;margin:0 auto 14px;padding:14px;border-radius:12px;background:#1d2b45;text-align:left;}
@@ -38,6 +40,7 @@
     <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
     <button onclick="saveStaff()">Save</button>
   </div>
+  <button id="soundBtn" onclick="unlockSound()">🔊 Tap once to turn on voice</button>
   <div id="reader"></div>
   <div id="result" class="idle">Point the camera at a participant's QR code.</div>
   <div id="enableBox">
@@ -51,13 +54,28 @@
 
 <script>
   // ---- CONFIG: update this if the Apps Script backend is redeployed ----
+  // Staff deployment ("Anyone within cru.org.sg"). Used for the classic
+  // redirect + "Scan Next" mode, and for the "my scans" dashboard link.
   var SCRIPT_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
+
+  // FAST MODE (no "Scan Next" tap): paste the /exec URL of a SECOND
+  // deployment whose access is "Anyone" (setup guide section 7b).
+  // Leave '' to keep the classic mode. If fast mode ever fails, the page
+  // falls back to classic mode on its own, so a scan is never lost.
+  var FAST_EXEC_URL = '';
+
+  // Must match SCAN_KEY in Code.gs (leave '' if Code.gs has none).
+  var SCAN_KEY = '';
+
+  var SHOW_RESULT_MS = 1500;   // how long the result shows before the next scan is accepted
+  var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
   var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
   var WARN_ANNOUNCEMENT = 'You have already checked in earlier. Please proceed to the next counter, thank you.';
 
   var STAFF_KEY = 'qrScanStaffEmail';
 
   var busy = false;
+  var lastCode = '', lastCodeAt = 0;
 
   // ---- Scanning Staff email (saved on this device) ----
   function getStaff() {
@@ -94,12 +112,14 @@
     el.innerHTML = text;
   }
 
-  function showSuccess(name) {
+  function showSuccess(name, regId) {
     var el = document.getElementById('result');
     el.className = 'ok';
     el.innerHTML =
       (name ? escapeHtml(name) + ' — PRESENT ✓' : 'PRESENT ✓') +
-      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>';
+      (regId ? '<div class="subtext">' + escapeHtml(regId) + '</div>' : '') +
+      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>' +
+      '<button id="speakBtn" onclick="speak(SUCCESS_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
   }
 
   function showAlreadyChecked(name, time) {
@@ -107,7 +127,8 @@
     el.className = 'warn';
     el.innerHTML =
       (name ? escapeHtml(name) + ' — already checked in at ' + escapeHtml(time) : 'Already checked in') +
-      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>';
+      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>' +
+      '<button id="speakBtn" onclick="speak(WARN_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
   }
 
   function escapeHtml(s) {
@@ -116,6 +137,58 @@
     });
   }
 
+  // Best-effort automatic voice, tried right on page load — works reliably
+  // on most Android phones. On iPhone/iPad, iOS only allows the Web Speech
+  // API to actually make sound when speak() runs directly inside a real
+  // tap/click handler, so the automatic attempt is reliably silent there;
+  // that's why every message also shows a "🔊 Tap to hear announcement"
+  // button, which always works since tapping it is a genuine user gesture.
+  // Picks a female voice when the device has one available.
+  function pickFemaleVoice() {
+    var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+    var names = ['female','samantha','victoria','karen','moira','tessa','fiona','kate','serena','susan','allison','ava','zoe','nicky','zira','hazel','eva','joanna','salli','kimberly'];
+    for (var i = 0; i < vs.length; i++) {
+      var n = (vs[i].name || '').toLowerCase();
+      for (var j = 0; j < names.length; j++) {
+        if (n.indexOf(names[j]) > -1) return vs[i];
+      }
+    }
+    for (var i = 0; i < vs.length; i++) {
+      if (/^en/i.test(vs[i].lang)) return vs[i];
+    }
+    return null;
+  }
+
+  // iPhone/iPad only allow speech after one real tap. In fast mode the page
+  // never reloads, so one tap here turns voice on for the whole session.
+  function unlockSound() {
+    try {
+      var u = new SpeechSynthesisUtterance('Voice on');
+      var v = pickFemaleVoice(); if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+    document.getElementById('soundBtn').style.display = 'none';
+  }
+
+  function speak(text) {
+    try {
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      var v = pickFemaleVoice();
+      if (v) u.voice = v;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignore — visual message still shown */ }
+  }
+
+  // Warm up the voice list early so it's more likely to be ready by the
+  // time speak() is actually called.
+  try {
+    window.speechSynthesis.getVoices();
+    if ('onvoiceschanged' in window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = function () {};
+    }
+  } catch (e) {}
+
   function stopCameraSafely() {
     try {
       if (html5Qrcode) { html5Qrcode.stop().catch(function () {}); }
@@ -123,13 +196,70 @@
   }
 
   function goMark(token) {
-    if (busy) return;
+    token = String(token || '').trim();
+    if (!token || busy) return;
+    var now = Date.now();
+    if (token === lastCode && now - lastCodeAt < SAME_CODE_PAUSE_MS) return; // same QR still in front of camera
+    lastCode = token; lastCodeAt = now;
     busy = true;
     showResult('idle', 'Checking...');
+    if (FAST_EXEC_URL) fastMark(token); else redirectMark(token);
+  }
+
+  // Fast mode: ask the backend in the background. The camera keeps running,
+  // so staff can scan the next person straight away.
+  function fastMark(token) {
+    var url = FAST_EXEC_URL + '?action=markjson&token=' + encodeURIComponent(token) +
+      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now();
+    var timedOut = false;
+    var timer = setTimeout(function () { timedOut = true; fallback('timeout'); }, 15000);
+    fetch(url, { method: 'GET', cache: 'no-store', redirect: 'follow' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (timedOut) return;
+        clearTimeout(timer);
+        showResultObj(res);
+        setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
+      })
+      .catch(function (err) {
+        if (timedOut) return;
+        clearTimeout(timer);
+        fallback(err);
+      });
+
+    // If fast mode can't reach the backend (network, sign-in rules, wrong URL),
+    // use the classic redirect so the scan still gets recorded.
+    function fallback(why) {
+      try { console.log('Fast mode failed, using classic mode:', why); } catch (e) {}
+      redirectMark(token);
+    }
+  }
+
+  function showResultObj(res) {
+    res = res || {};
+    if (res.success && res.alreadyChecked) {
+      showAlreadyChecked(res.name, res.time);
+      speak(WARN_ANNOUNCEMENT);
+      buzz([80, 60, 80]);
+    } else if (res.success) {
+      showSuccess(res.name, res.regId);
+      speak(SUCCESS_ANNOUNCEMENT);
+      buzz(120);
+    } else {
+      showResult('err', escapeHtml(res.message || 'Not recognized'));
+      buzz([200, 80, 200]);
+    }
+  }
+
+  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+  // Classic mode: full-page redirect to the backend, then "Scan Next" back.
+  function redirectMark(token) {
     var returnUrl = window.location.origin + window.location.pathname;
     stopCameraSafely();
-    var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(String(token).trim()) +
-      '&staff=' + encodeURIComponent(getStaff()) + '&return=' + encodeURIComponent(returnUrl);
+    var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) +
+      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) +
+      '&return=' + encodeURIComponent(returnUrl);
     window.location.href = url;
   }
 
@@ -167,16 +297,21 @@
 
   (function init() {
     renderStaffBar();
+    if (FAST_EXEC_URL && /iP(hone|ad|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
+      document.getElementById('soundBtn').style.display = 'block';
+    }
     var params = new URLSearchParams(window.location.search);
     var r = params.get('r');
 
     if (r === 'ok') {
       var name = params.get('name') || '';
       showSuccess(name);
+      speak(SUCCESS_ANNOUNCEMENT); // best-effort; works on most Android, silently a no-op on iOS (tap the button instead)
     } else if (r === 'warn') {
       var wName = params.get('name') || '';
       var wTime = params.get('time') || '';
       showAlreadyChecked(wName, wTime);
+      speak(WARN_ANNOUNCEMENT); // best-effort; see note above
     } else if (r === 'err') {
       var msg = params.get('msg') || 'Not recognized';
       showResult('err', escapeHtml(msg));
