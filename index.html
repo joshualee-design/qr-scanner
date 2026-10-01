@@ -23,18 +23,30 @@
   #manualBox{display:none;max-width:420px;margin:12px auto 0;}
   #manualBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
   #manualBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
+  #staffBar{max-width:420px;margin:0 auto 12px;font-size:13px;color:#bbb;}
+  #staffBar a{color:#6ab7ff;margin-left:6px;}
+  #staffBox{display:none;max-width:420px;margin:0 auto 14px;padding:14px;border-radius:12px;background:#1d2b45;text-align:left;}
+  #staffBox p{margin:0 0 8px;font-size:13px;color:#ddd;}
+  #staffBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
+  #staffBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
 </style>
 </head>
 <body>
   <h1>Event Check-In Scanner</h1>
+  <div id="staffBar"></div>
+  <div id="staffBox">
+    <p>Enter your staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan. (If you are signed in to your Cru Google account, that email is used.)</p>
+    <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
+    <button onclick="saveStaff()">Save</button>
+  </div>
   <div id="reader"></div>
   <div id="result" class="idle">Point the camera at a participant's QR code.</div>
   <div id="enableBox">
     <button onclick="startScanner()">Enable camera</button>
   </div>
-  <button id="manualToggle" onclick="toggleManual()">Type code manually instead</button>
+  <button id="manualToggle" onclick="toggleManual()">Type Registration ID manually instead</button>
   <div id="manualBox">
-    <input id="manualInput" type="text" placeholder="Paste or type the code">
+    <input id="manualInput" type="text" placeholder="e.g. ASF260001" autocapitalize="characters">
     <button onclick="submitManual()">Check in</button>
   </div>
 
@@ -44,7 +56,37 @@
   var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
   var WARN_ANNOUNCEMENT = 'You have already checked in earlier. Please proceed to the next counter, thank you.';
 
+  var STAFF_KEY = 'qrScanStaffEmail';
+
   var busy = false;
+
+  // ---- Scanning Staff email (saved on this device) ----
+  function getStaff() {
+    try { return localStorage.getItem(STAFF_KEY) || ''; } catch (e) { return ''; }
+  }
+  function saveStaff() {
+    var v = document.getElementById('staffInput').value.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { alert('Please enter a valid email.'); return; }
+    try { localStorage.setItem(STAFF_KEY, v); } catch (e) {}
+    document.getElementById('staffBox').style.display = 'none';
+    renderStaffBar();
+  }
+  function changeStaff() {
+    document.getElementById('staffInput').value = getStaff();
+    document.getElementById('staffBox').style.display = 'block';
+  }
+  function renderStaffBar() {
+    var s = getStaff();
+    var bar = document.getElementById('staffBar');
+    if (s) {
+      var dash = SCRIPT_EXEC_URL + '?view=dashboard&tab=log&staff=' + encodeURIComponent(s);
+      bar.innerHTML = 'Scanning as <b>' + escapeHtml(s) + '</b> <a href="#" onclick="changeStaff();return false;">change</a>' +
+        '<a href="' + escapeHtml(dash) + '" target="_top">my scans</a>';
+    } else {
+      bar.innerHTML = '';
+      document.getElementById('staffBox').style.display = 'block';
+    }
+  }
   var html5Qrcode = null;
 
   function showResult(cls, text) {
@@ -130,7 +172,8 @@
     showResult('idle', 'Checking...');
     var returnUrl = window.location.origin + window.location.pathname;
     stopCameraSafely();
-    var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) + '&return=' + encodeURIComponent(returnUrl);
+    var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(String(token).trim()) +
+      '&staff=' + encodeURIComponent(getStaff()) + '&return=' + encodeURIComponent(returnUrl);
     window.location.href = url;
   }
 
@@ -167,6 +210,7 @@
   }
 
   (function init() {
+    renderStaffBar();
     var params = new URLSearchParams(window.location.search);
     var r = params.get('r');
 
