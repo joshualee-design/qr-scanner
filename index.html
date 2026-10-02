@@ -64,10 +64,13 @@
   // deployment whose access is "Anyone" (setup guide section 7b).
   // Leave '' to keep the classic mode. If fast mode ever fails, the page
   // falls back to classic mode on its own, so a scan is never lost.
-  var FAST_EXEC_URL = 'https://script.google.com/macros/s/AKfycbyBTrtgmFjGDZrpiulLA4SSVh_gJX4MM5qeK7zmu7UXqtjG0Ikx4vK0jPOCnXzBNm1yug/exec';
+  var FAST_EXEC_URL = 'https://script.google.com/a/macros/cru.org.sg/s/AKfycbxlM-5WHxKhYS1YYb5zLXQqVTuPODSGU2aD-0ifl8L3VXWIc9EYvlzmovKEL2POCd-gVA/exec';
 
   // Must match SCAN_KEY in Code.gs (leave '' if Code.gs has none).
   var SCAN_KEY = 'asf26-eba111a8';
+
+  // Voice: false = silent (text + vibration only). Set true to turn voice back on.
+  var VOICE_ON = false;
 
   var SHOW_RESULT_MS = 1500;   // how long the result shows before the next scan is accepted
   var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
@@ -171,6 +174,7 @@
   }
 
   function speak(text) {
+    if (!VOICE_ON) return;
     try {
       window.speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(text);
@@ -337,7 +341,7 @@
 
   (function init() {
     renderStaffBar();
-    if (FAST_EXEC_URL && /iP(hone|ad|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
+    if (VOICE_ON && FAST_EXEC_URL && /iP(hone|ad|od)|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document) {
       document.getElementById('soundBtn').style.display = 'block';
     }
     var params = new URLSearchParams(window.location.search);
