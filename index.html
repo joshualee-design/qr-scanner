@@ -16,7 +16,6 @@
   .warn{background:#d97706;}
   .err{background:#dc2626;}
   .subtext{font-size:14px;font-weight:400;margin-top:8px;}
-  #speakBtn{display:inline-block;margin-top:14px;padding:10px 18px;background:rgba(255,255,255,.18);color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:20px;font-size:14px;font-weight:600;cursor:pointer;}
   #enableBox{display:none;margin-top:16px;}
   #enableBox button{padding:12px 22px;font-size:15px;font-weight:600;border-radius:8px;border:none;background:#2563eb;color:#fff;}
   #manualToggle{margin-top:18px;background:none;border:none;color:#6ab7ff;font-size:13px;text-decoration:underline;}
@@ -65,10 +64,10 @@
   // deployment whose access is "Anyone" (setup guide section 7b).
   // Leave '' to keep the classic mode. If fast mode ever fails, the page
   // falls back to classic mode on its own, so a scan is never lost.
-  var FAST_EXEC_URL = '';
+  var FAST_EXEC_URL = 'https://script.google.com/macros/s/AKfycbyBTrtgmFjGDZrpiulLA4SSVh_gJX4MM5qeK7zmu7UXqtjG0Ikx4vK0jPOCnXzBNm1yug/exec';
 
   // Must match SCAN_KEY in Code.gs (leave '' if Code.gs has none).
-  var SCAN_KEY = '';
+  var SCAN_KEY = 'asf26-eba111a8';
 
   var SHOW_RESULT_MS = 1500;   // how long the result shows before the next scan is accepted
   var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
@@ -122,8 +121,7 @@
     el.innerHTML =
       (name ? escapeHtml(name) + ' — PRESENT ✓' : 'PRESENT ✓') +
       (regId ? '<div class="subtext">' + escapeHtml(regId) + '</div>' : '') +
-      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>' +
-      '<button id="speakBtn" onclick="speak(SUCCESS_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>';
   }
 
   function showAlreadyChecked(name, time) {
@@ -131,8 +129,7 @@
     el.className = 'warn';
     el.innerHTML =
       (name ? escapeHtml(name) + ' — already checked in at ' + escapeHtml(time) : 'Already checked in') +
-      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>' +
-      '<button id="speakBtn" onclick="speak(WARN_ANNOUNCEMENT)">🔊 Tap to hear announcement</button>';
+      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>';
   }
 
   function escapeHtml(s) {
@@ -143,10 +140,9 @@
 
   // Best-effort automatic voice, tried right on page load — works reliably
   // on most Android phones. On iPhone/iPad, iOS only allows the Web Speech
-  // API to actually make sound when speak() runs directly inside a real
-  // tap/click handler, so the automatic attempt is reliably silent there;
-  // that's why every message also shows a "🔊 Tap to hear announcement"
-  // button, which always works since tapping it is a genuine user gesture.
+  // API to actually make sound after a real tap. In fast mode the page never
+  // reloads, so the one-time "Tap once to turn on voice" button covers the
+  // whole session. (The per-scan "Tap to hear" button was removed in v2.4.)
   // Picks a female voice when the device has one available.
   function pickFemaleVoice() {
     var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
@@ -223,7 +219,7 @@
   function checkFastMode(done) {
     var bar = document.getElementById('modeBar');
     if (!FAST_EXEC_URL) {
-      bar.className = ''; bar.textContent = 'Mode: classic (tap "Scan Next" after each scan)';
+      bar.className = 'off'; bar.textContent = 'Mode: classic (tap "Scan Next" after each scan). To scan without Scan Next, fill in FAST_EXEC_URL (setup guide 7b).';
       return done();
     }
     bar.className = ''; bar.textContent = 'Checking fast mode...';
