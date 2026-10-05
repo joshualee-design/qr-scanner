@@ -6,6 +6,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Event Check-In Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<!--
+  ScannerStandalone.html  (v2.11, Oct 2026)  -> upload to GitHub as index.html
+  NEW in v2.11: OFFLINE MODE. If the phone loses signal, scans are saved on
+  the phone (grey "SAVED OFFLINE" card, red bar at the top) and sent to the
+  sheet by themselves when the signal comes back. Needs fast mode
+  (FAST_EXEC_URL) and Code.gs v2.11 on the Fast scan deployment.
+-->
 <style>
   body{margin:0;padding:16px;font-family:-apple-system,Arial,sans-serif;background:#111;color:#fff;text-align:center;}
   h1{font-size:18px;margin:0 0 12px;}
@@ -15,6 +22,7 @@
   .ok{background:#16a34a;}
   .warn{background:#d97706;}
   .err{background:#dc2626;}
+  .saved{background:#4b5563;}
   .subtext{font-size:14px;font-weight:400;margin-top:8px;}
   #enableBox{display:none;margin-top:16px;}
   #enableBox button{padding:12px 22px;font-size:15px;font-weight:600;border-radius:8px;border:none;background:#2563eb;color:#fff;}
@@ -31,12 +39,20 @@
   #staffBox p{margin:0 0 8px;font-size:13px;color:#ddd;}
   #staffBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
   #staffBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
+  /* Network status bar (offline mode) */
+  #netBar{max-width:420px;margin:0 auto 12px;padding:10px 12px;border-radius:10px;font-size:14px;font-weight:600;display:none;}
+  #netBar.online{display:block;background:#14532d;color:#bbf7d0;font-weight:500;font-size:13px;}
+  #netBar.offline{display:block;background:#b91c1c;color:#fff;font-size:16px;}
+  #netBar.syncing{display:block;background:#a16207;color:#fff;}
+  #netBar .small{display:block;font-size:12px;font-weight:400;margin-top:4px;opacity:.9;}
+  #netBar button{margin-top:8px;padding:6px 14px;border-radius:16px;border:1px solid rgba(255,255,255,.6);background:rgba(255,255,255,.15);color:#fff;font-size:13px;font-weight:600;}
 </style>
 </head>
 <body>
   <h1>Event Check-In Scanner</h1>
   <div id="staffBar"></div>
   <div id="modeBar"></div>
+  <div id="netBar"></div>
   <div id="staffBox">
     <p>Enter your staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan. (If you are signed in to your Cru Google account, that email is used.)</p>
     <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
@@ -62,9 +78,8 @@
 
   // FAST MODE (no "Scan Next" tap): paste the /exec URL of a SECOND
   // deployment whose access is "Anyone" (setup guide section 7b).
-  // Leave '' to keep the classic mode. If fast mode ever fails, the page
-  // falls back to classic mode on its own, so a scan is never lost.
-  var FAST_EXEC_URL = 'https://script.google.com/macros/s/AKfycbyBTrtgmFjGDZrpiulLA4SSVh_gJX4MM5qeK7zmu7UXqtjG0Ikx4vK0jPOCnXzBNm1yug/exec';
+  // Offline mode also needs this. >>> PASTE YOUR FAST SCAN LINK HERE <<<
+  var FAST_EXEC_URL = '';
 
   // Must match SCAN_KEY in Code.gs (leave '' if Code.gs has none).
   var SCAN_KEY = 'asf26-eba111a8';
@@ -72,15 +87,27 @@
   // Voice: false = silent (text + vibration only). Set true to turn voice back on.
   var VOICE_ON = false;
 
-  var SHOW_RESULT_MS = 1500;   // how long the result shows before the next scan is accepted
+  // Offline mode: true = save scans on the phone when there is no signal.
+  var OFFLINE_MODE = true;
+
+  var SHOW_RESULT_MS = 1500;     // how long the result shows before the next scan is accepted
   var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
+  var SCAN_TIMEOUT_MS = 8000;    // no reply after this long = treat as no signal, save offline
+  var HEARTBEAT_MS = 10000;      // how often to check the connection
+  var SYNC_BATCH = 10;           // saved scans sent per request
   var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
   var WARN_ANNOUNCEMENT = 'You have already checked in earlier. Please proceed to the next counter, thank you.';
 
   var STAFF_KEY = 'qrScanStaffEmail';
+  var QUEUE_KEY = 'qrOfflineQueue';
 
   var busy = false;
-  var fastOk = false;   // set by checkFastMode() when the page loads
+  var fastOk = false;    // fast mode backend reachable and key correct
+  var fastEverOk = false; // fast mode worked at least once on this page
+  var online = true;     // our best guess of the connection
+  var syncing = false;
+  var lastSyncNote = '';
+  var memQueue = null;   // used only if this browser blocks storage
   var lastCode = '', lastCodeAt = 0;
 
   // ---- Scanning Staff email (saved on this device) ----
@@ -119,20 +146,23 @@
   }
 
   function showSuccess(name, regId) {
-    var el = document.getElementById('result');
-    el.className = 'ok';
-    el.innerHTML =
+    showResult('ok',
       (name ? escapeHtml(name) + ' — PRESENT ✓' : 'PRESENT ✓') +
       (regId ? '<div class="subtext">' + escapeHtml(regId) + '</div>' : '') +
-      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>';
+      '<div class="subtext">' + escapeHtml(SUCCESS_ANNOUNCEMENT) + '</div>');
   }
 
   function showAlreadyChecked(name, time) {
-    var el = document.getElementById('result');
-    el.className = 'warn';
-    el.innerHTML =
+    showResult('warn',
       (name ? escapeHtml(name) + ' — already checked in at ' + escapeHtml(time) : 'Already checked in') +
-      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>';
+      '<div class="subtext">' + escapeHtml(WARN_ANNOUNCEMENT) + '</div>');
+  }
+
+  function showSavedOffline(token, already) {
+    showResult('saved',
+      (already ? 'ALREADY SAVED on this phone' : 'SAVED OFFLINE') +
+      '<div class="subtext">' + escapeHtml(token) + '</div>' +
+      '<div class="subtext">No signal. This scan will be checked and sent when the phone is back online. Keep this page open.</div>');
   }
 
   function escapeHtml(s) {
@@ -141,29 +171,17 @@
     });
   }
 
-  // Best-effort automatic voice, tried right on page load — works reliably
-  // on most Android phones. On iPhone/iPad, iOS only allows the Web Speech
-  // API to actually make sound after a real tap. In fast mode the page never
-  // reloads, so the one-time "Tap once to turn on voice" button covers the
-  // whole session. (The per-scan "Tap to hear" button was removed in v2.4.)
-  // Picks a female voice when the device has one available.
+  // ---- Voice (off by default) ----
   function pickFemaleVoice() {
     var vs = (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
     var names = ['female','samantha','victoria','karen','moira','tessa','fiona','kate','serena','susan','allison','ava','zoe','nicky','zira','hazel','eva','joanna','salli','kimberly'];
     for (var i = 0; i < vs.length; i++) {
       var n = (vs[i].name || '').toLowerCase();
-      for (var j = 0; j < names.length; j++) {
-        if (n.indexOf(names[j]) > -1) return vs[i];
-      }
+      for (var j = 0; j < names.length; j++) { if (n.indexOf(names[j]) > -1) return vs[i]; }
     }
-    for (var i = 0; i < vs.length; i++) {
-      if (/^en/i.test(vs[i].lang)) return vs[i];
-    }
+    for (var k = 0; k < vs.length; k++) { if (/^en/i.test(vs[k].lang)) return vs[k]; }
     return null;
   }
-
-  // iPhone/iPad only allow speech after one real tap. In fast mode the page
-  // never reloads, so one tap here turns voice on for the whole session.
   function unlockSound() {
     try {
       var u = new SpeechSynthesisUtterance('Voice on');
@@ -172,33 +190,144 @@
     } catch (e) {}
     document.getElementById('soundBtn').style.display = 'none';
   }
-
   function speak(text) {
     if (!VOICE_ON) return;
     try {
       window.speechSynthesis.cancel();
       var u = new SpeechSynthesisUtterance(text);
-      var v = pickFemaleVoice();
-      if (v) u.voice = v;
+      var v = pickFemaleVoice(); if (v) u.voice = v;
       window.speechSynthesis.speak(u);
-    } catch (e) { /* ignore — visual message still shown */ }
-  }
-
-  // Warm up the voice list early so it's more likely to be ready by the
-  // time speak() is actually called.
-  try {
-    window.speechSynthesis.getVoices();
-    if ('onvoiceschanged' in window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = function () {};
-    }
-  } catch (e) {}
-
-  function stopCameraSafely() {
-    try {
-      if (html5Qrcode) { html5Qrcode.stop().catch(function () {}); }
     } catch (e) {}
   }
+  try { window.speechSynthesis.getVoices(); } catch (e) {}
 
+  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
+
+  function stopCameraSafely() {
+    try { if (html5Qrcode) { html5Qrcode.stop().catch(function () {}); } } catch (e) {}
+  }
+
+  // ---- Offline queue (saved in this browser) ----
+  function loadQueue() {
+    if (memQueue) return memQueue;
+    try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]') || []; } catch (e) { return memQueue || []; }
+  }
+  function saveQueue(q) {
+    try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); memQueue = null; }
+    catch (e) { memQueue = q; } // storage blocked: keep in memory (lost if the page closes)
+    renderNetBar();
+  }
+  function queueScan(token) {
+    var q = loadQueue();
+    var dup = q.some(function (it) { return it.token.toUpperCase() === token.toUpperCase(); });
+    if (!dup) {
+      q.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), token: token, staff: getStaff(), at: Date.now() });
+      saveQueue(q);
+    }
+    showSavedOffline(token, dup);
+    buzz(dup ? [60, 60, 60] : [40, 40, 40, 40, 40]);
+  }
+
+  // ---- Network status bar ----
+  function renderNetBar() {
+    var bar = document.getElementById('netBar');
+    if (!OFFLINE_MODE || !FAST_EXEC_URL) { bar.className = ''; bar.innerHTML = ''; return; }
+    var n = loadQueue().length;
+    var warnMem = memQueue ? '<span class="small">Warning: this browser blocks saving. Do not close this page.</span>' : '';
+    if (!online) {
+      bar.className = 'offline';
+      bar.innerHTML = '⚠ OFFLINE: keep scanning, scans are saved on this phone' +
+        '<span class="small">' + n + ' scan' + (n === 1 ? '' : 's') + ' waiting to send. Do not close this page.</span>' + warnMem;
+    } else if (n > 0 || syncing) {
+      bar.className = 'syncing';
+      bar.innerHTML = (syncing ? 'Back online: sending ' : 'Online: ') + n + ' saved scan' + (n === 1 ? '' : 's') + (syncing ? '…' : ' waiting') +
+        '<span class="small">Keep this page open until this reaches 0.</span>' +
+        (!syncing ? '<button onclick="syncQueue()">Send now</button>' : '') + warnMem;
+    } else {
+      bar.className = 'online';
+      bar.innerHTML = '● Online: scans are sent straight away' + (lastSyncNote ? '<span class="small">' + lastSyncNote + '</span>' : '');
+    }
+  }
+
+  function setOnline(v) {
+    var was = online;
+    online = v;
+    renderNetBar();
+    if (v && !was) syncQueue();
+  }
+
+  // Ping the Fast scan deployment. Tells us if the internet really works
+  // (a phone can show Wi-Fi bars with no internet behind them).
+  function ping(timeoutMs) {
+    return new Promise(function (resolve) {
+      if (!FAST_EXEC_URL) return resolve({ reach: false });
+      var done = false;
+      var t = setTimeout(function () { if (!done) { done = true; resolve({ reach: false }); } }, timeoutMs || 6000);
+      fetch(fastUrl() + '?action=ping&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now(), { cache: 'no-store', redirect: 'follow' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) { if (!done) { done = true; clearTimeout(t); resolve({ reach: true, json: j }); } })
+        .catch(function () { if (!done) { done = true; clearTimeout(t); resolve({ reach: false }); } });
+    });
+  }
+
+  function heartbeat() {
+    if (!FAST_EXEC_URL) return;
+    ping(6000).then(function (r) {
+      if (r.reach && r.json && r.json.ok && r.json.keyOk) {
+        if (!fastOk) { fastOk = true; setModeBar('on'); }
+        fastEverOk = true;
+        setOnline(true);
+      } else if (!r.reach && (fastEverOk || navigator.onLine === false)) {
+        // Only call it "offline" once fast mode has worked on this page, so a
+        // wrong FAST_EXEC_URL never hides scans on the phone.
+        setOnline(false);
+      }
+    });
+  }
+
+  // Send saved scans in small batches. Each one is checked against the
+  // roster as normal; results go to the Scan Log ("QR scan (offline sync)").
+  function syncQueue() {
+    if (syncing || !online || !fastOk) return;
+    var q = loadQueue();
+    if (!q.length) { renderNetBar(); return; }
+    syncing = true; renderNetBar();
+    var batch = q.slice(0, SYNC_BATCH);
+    var url = fastUrl() + '?action=markbatch&key=' + encodeURIComponent(SCAN_KEY) +
+      '&items=' + encodeURIComponent(JSON.stringify(batch)) + '&t=' + Date.now();
+    var done = false;
+    var timer = setTimeout(function () { if (!done) { done = true; syncing = false; setOnline(false); } }, 30000);
+    fetch(url, { cache: 'no-store', redirect: 'follow' })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (done) return; done = true; clearTimeout(timer);
+        if (!res || !res.ok || !res.results) { syncing = false; lastSyncNote = 'Sync problem: ' + ((res && res.message) || 'unexpected reply'); renderNetBar(); return; }
+        var sentIds = {}, problems = 0, okCount = 0;
+        res.results.forEach(function (r) {
+          if (r.retry) return; // busy / error: keep it and try again later
+          sentIds[r.id] = 1;
+          if (r.success && (!r.alreadyChecked || r.sameStaff)) okCount++; else problems++;
+        });
+        var left = loadQueue().filter(function (it) { return !sentIds[it.id]; });
+        saveQueue(left);
+        syncTotals.ok += okCount; syncTotals.problems += problems;
+        lastSyncNote = 'Last sync: ' + syncTotals.ok + ' checked in' +
+          (syncTotals.problems ? ', ' + syncTotals.problems + ' with a problem (see Scan Log on the dashboard)' : '');
+        syncing = false;
+        renderNetBar();
+        if (left.length) setTimeout(syncQueue, 300); // more to send
+        else if (document.getElementById('result').className === 'saved') {
+          showResult('idle', 'Back online. All saved scans have been sent. Ready for the next scan.');
+        }
+      })
+      .catch(function () {
+        if (done) return; done = true; clearTimeout(timer);
+        syncing = false; setOnline(false);
+      });
+  }
+  var syncTotals = { ok: 0, problems: 0 };
+
+  // ---- Scanning ----
   function goMark(token) {
     token = String(token || '').trim();
     if (!token || busy) return;
@@ -206,76 +335,88 @@
     if (token === lastCode && now - lastCodeAt < SAME_CODE_PAUSE_MS) return; // same QR still in front of camera
     lastCode = token; lastCodeAt = now;
     busy = true;
+
+    var canOffline = OFFLINE_MODE && FAST_EXEC_URL;
+    if (canOffline && (!online || (navigator.onLine === false))) {
+      if (navigator.onLine === false) setOnline(false);
+      queueScan(token);
+      setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
+      return;
+    }
     showResult('idle', 'Checking...');
-    if (FAST_EXEC_URL && fastOk) fastMark(token); else redirectMark(token);
+    if (FAST_EXEC_URL && fastOk) fastMark(token);
+    else redirectMark(token);
   }
 
-  // Fast mode: ask the backend in the background. The camera keeps running,
-  // so staff can scan the next person straight away.
-  // Workspace accounts are given a link like .../a/macros/cru.org.sg/s/ID/exec,
-  // which forces a Cru sign-in and blocks background calls. The plain
-  // .../macros/s/ID/exec form of the SAME deployment does not.
+  // Fast mode: ask the backend in the background. The camera keeps running.
+  // Workspace links like .../a/macros/cru.org.sg/s/ID/exec force a Cru
+  // sign-in; the plain .../macros/s/ID/exec form of the SAME deployment does not.
   function fastUrl() {
     return String(FAST_EXEC_URL).trim().replace(/\/a\/macros\/[^\/]+\/s\//, '/macros/s/');
   }
 
+  function setModeBar(state, why) {
+    var bar = document.getElementById('modeBar');
+    if (state === 'classic') { bar.className = 'off'; bar.textContent = 'Mode: classic (tap "Scan Next" after each scan). To scan without Scan Next, fill in FAST_EXEC_URL (setup guide 7b).'; }
+    else if (state === 'checking') { bar.className = ''; bar.textContent = 'Checking fast mode...'; }
+    else if (state === 'on') { bar.className = 'on'; bar.textContent = '⚡ Fast mode ON (no "Scan Next" needed)'; }
+    else { bar.className = 'off'; bar.textContent = 'Fast mode OFF: ' + why; }
+  }
+
   // On page load, check that fast mode really works, and say so on screen.
   function checkFastMode(done) {
-    var bar = document.getElementById('modeBar');
-    if (!FAST_EXEC_URL) {
-      bar.className = 'off'; bar.textContent = 'Mode: classic (tap "Scan Next" after each scan). To scan without Scan Next, fill in FAST_EXEC_URL (setup guide 7b).';
-      return done();
-    }
-    bar.className = ''; bar.textContent = 'Checking fast mode...';
-    var finished = false;
-    var t = setTimeout(function () { fail('no reply from Google (check the Fast scan deployment access is "Anyone")'); }, 10000);
-    fetch(fastUrl() + '?action=ping&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now(), { cache: 'no-store', redirect: 'follow' })
-      .then(function (r) { return r.json(); })
-      .then(function (j) {
-        if (finished) return;
-        if (!j || !j.ok) return fail('unexpected reply. Is Code.gs updated and the Fast scan deployment on a New version?');
-        if (!j.keyOk) return fail('SCAN_KEY here does not match SCAN_KEY in Code.gs');
-        finished = true; clearTimeout(t);
-        fastOk = true;
-        bar.className = 'on'; bar.textContent = '⚡ Fast mode ON (no "Scan Next" needed)';
-        done();
-      })
-      .catch(function () {
-        fail('cannot reach the Fast scan deployment. Check its access is "Anyone" (not "Anyone within cru.org.sg" or "Anyone with Google account"), and that FAST_EXEC_URL is its /exec link');
-      });
-    function fail(why) {
-      if (finished) return;
-      finished = true; clearTimeout(t);
-      fastOk = false;
-      bar.className = 'off'; bar.textContent = 'Fast mode OFF: ' + why + '. Using classic mode for now.';
+    if (!FAST_EXEC_URL) { setModeBar('classic'); return done(); }
+    setModeBar('checking');
+    ping(10000).then(function (r) {
+      if (!r.reach) {
+        fastOk = false;
+        if (OFFLINE_MODE && navigator.onLine === false) {
+          setModeBar('off', 'no signal right now. Scans will be saved on this phone.');
+          setOnline(false);
+        } else {
+          setModeBar('off', 'cannot reach the Fast scan deployment. Check its access is "Anyone" (not "Anyone within cru.org.sg" or "Anyone with Google account"), and that FAST_EXEC_URL is its /exec link. Using classic mode for now.');
+        }
+      } else if (!r.json || !r.json.ok) {
+        fastOk = false; setModeBar('off', 'unexpected reply. Is Code.gs updated and the Fast scan deployment on a New version? Using classic mode for now.');
+      } else if (!r.json.keyOk) {
+        fastOk = false; setModeBar('off', 'SCAN_KEY here does not match SCAN_KEY in Code.gs. Using classic mode for now.');
+      } else {
+        fastOk = true; fastEverOk = true; setModeBar('on'); setOnline(true);
+      }
       done();
-    }
+    });
   }
 
   function fastMark(token) {
     var url = fastUrl() + '?action=markjson&token=' + encodeURIComponent(token) +
       '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now();
-    var timedOut = false;
-    var timer = setTimeout(function () { timedOut = true; fallback('timeout'); }, 15000);
+    var finished = false;
+    var timer = setTimeout(function () { if (!finished) { finished = true; noReply('timeout'); } }, SCAN_TIMEOUT_MS);
     fetch(url, { method: 'GET', cache: 'no-store', redirect: 'follow' })
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (timedOut) return;
-        clearTimeout(timer);
+        if (finished) return; finished = true; clearTimeout(timer);
+        setOnline(true);
         showResultObj(res);
         setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
       })
       .catch(function (err) {
-        if (timedOut) return;
-        clearTimeout(timer);
-        fallback(err);
+        if (finished) return; finished = true; clearTimeout(timer);
+        noReply(err);
       });
 
-    // If fast mode can't reach the backend (network, sign-in rules, wrong URL),
-    // use the classic redirect so the scan still gets recorded.
-    function fallback(why) {
-      try { console.log('Fast mode failed, using classic mode:', why); } catch (e) {}
-      redirectMark(token);
+    // No reply. With offline mode on, save the scan on the phone (a page
+    // redirect with no signal would lose the scanner). Without it, fall back
+    // to the classic redirect so the scan still gets recorded.
+    function noReply(why) {
+      try { console.log('Fast mode failed:', why); } catch (e) {}
+      if (OFFLINE_MODE) {
+        setOnline(false);
+        queueScan(token);
+        setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
+      } else {
+        redirectMark(token);
+      }
     }
   }
 
@@ -295,8 +436,6 @@
     }
   }
 
-  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
-
   // Classic mode: full-page redirect to the backend, then "Scan Next" back.
   function redirectMark(token) {
     var returnUrl = window.location.origin + window.location.pathname;
@@ -304,6 +443,7 @@
     var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) +
       '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) +
       '&return=' + encodeURIComponent(returnUrl);
+    leavingOnPurpose = true;
     window.location.href = url;
   }
 
@@ -314,11 +454,9 @@
       html5Qrcode.start(
         { facingMode: 'environment' },
         { fps: 10, qrbox: { width: 250, height: 250 } },
-        function onScanSuccess(decodedText) {
-          goMark(decodedText);
-        },
+        function onScanSuccess(decodedText) { goMark(decodedText); },
         function onScanFailure() { /* ignore per-frame no-match */ }
-      ).catch(function (err) {
+      ).catch(function () {
         showResult('err', 'Camera unavailable — tap below');
         document.getElementById('enableBox').style.display = 'block';
       });
@@ -336,8 +474,24 @@
   function submitManual() {
     var val = document.getElementById('manualInput').value.trim();
     if (!val) return;
+    lastCode = ''; // allow typing the same ID again on purpose
     goMark(val);
+    document.getElementById('manualInput').value = '';
   }
+
+  // Warn before leaving the page while scans are still waiting to send.
+  var leavingOnPurpose = false;
+  window.addEventListener('beforeunload', function (e) {
+    if (leavingOnPurpose) return;
+    if (OFFLINE_MODE && loadQueue().length) {
+      e.preventDefault();
+      e.returnValue = 'Some scans are not sent yet. Stay on this page.';
+      return e.returnValue;
+    }
+  });
+  window.addEventListener('online', function () { heartbeat(); });
+  window.addEventListener('offline', function () { if (OFFLINE_MODE && FAST_EXEC_URL) setOnline(false); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) heartbeat(); });
 
   (function init() {
     renderStaffBar();
@@ -348,32 +502,23 @@
     var r = params.get('r');
 
     if (r === 'ok') {
-      var name = params.get('name') || '';
-      showSuccess(name);
-      speak(SUCCESS_ANNOUNCEMENT); // best-effort; works on most Android, silently a no-op on iOS (tap the button instead)
+      showSuccess(params.get('name') || '');
+      speak(SUCCESS_ANNOUNCEMENT);
     } else if (r === 'warn') {
-      var wName = params.get('name') || '';
-      var wTime = params.get('time') || '';
-      showAlreadyChecked(wName, wTime);
-      speak(WARN_ANNOUNCEMENT); // best-effort; see note above
+      showAlreadyChecked(params.get('name') || '', params.get('time') || '');
+      speak(WARN_ANNOUNCEMENT);
     } else if (r === 'err') {
-      var msg = params.get('msg') || 'Not recognized';
-      showResult('err', escapeHtml(msg));
+      showResult('err', escapeHtml(params.get('msg') || 'Not recognized'));
     }
+    if (r) history.replaceState(null, '', window.location.pathname);
 
-    // Clean the URL so a refresh doesn't re-show the old result.
-    if (r) {
-      history.replaceState(null, '', window.location.pathname);
-    }
-
-    // Give the result a moment to be read, then restart the camera for the
-    // next scan (requires one tap only the very first time camera access is
-    // granted on this device — after that, restarting like this works
-    // without a fresh permission prompt).
+    renderNetBar();
     busy = true; // hold scans until we know which mode to use
     checkFastMode(function () {
       setTimeout(function () { busy = false; }, r ? 1800 : 0);
+      syncQueue(); // send anything left over from before
     });
+    if (OFFLINE_MODE && FAST_EXEC_URL) setInterval(function () { heartbeat(); if (online) syncQueue(); }, HEARTBEAT_MS);
     startScanner();
   })();
 </script>
