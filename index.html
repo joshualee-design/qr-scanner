@@ -104,6 +104,7 @@
   var busy = false;
   var fastOk = false;    // fast mode backend reachable and key correct
   var fastEverOk = false; // fast mode worked at least once on this page
+  var fastBadSetup = false; // Google answered, but SCAN_KEY or Code.gs version is wrong
   var online = true;     // our best guess of the connection
   var syncing = false;
   var lastSyncNote = '';
@@ -274,12 +275,10 @@
     if (!FAST_EXEC_URL) return;
     ping(6000).then(function (r) {
       if (r.reach && r.json && r.json.ok && r.json.keyOk) {
-        if (!fastOk) { fastOk = true; setModeBar('on'); }
+        if (!fastOk) { fastOk = true; fastBadSetup = false; setModeBar('on'); }
         fastEverOk = true;
         setOnline(true);
-      } else if (!r.reach && (fastEverOk || navigator.onLine === false)) {
-        // Only call it "offline" once fast mode has worked on this page, so a
-        // wrong FAST_EXEC_URL never hides scans on the phone.
+      } else if (!r.reach && OFFLINE_MODE) {
         setOnline(false);
       }
     });
@@ -343,9 +342,13 @@
       setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
       return;
     }
+    // Classic redirect only when fast mode is not set up at all, or Google
+    // answered but the setup is wrong. With offline mode on, a scan is never
+    // sent by page redirect when Google can't be reached (that would lose the
+    // scanner page); it tries in the background and saves it if no reply.
+    if (!FAST_EXEC_URL || fastBadSetup || (!OFFLINE_MODE && !fastOk)) { showResult('idle', 'Checking...'); redirectMark(token); return; }
     showResult('idle', 'Checking...');
-    if (FAST_EXEC_URL && fastOk) fastMark(token);
-    else redirectMark(token);
+    fastMark(token);
   }
 
   // Fast mode: ask the backend in the background. The camera keeps running.
@@ -370,16 +373,16 @@
     ping(10000).then(function (r) {
       if (!r.reach) {
         fastOk = false;
-        if (OFFLINE_MODE && navigator.onLine === false) {
-          setModeBar('off', 'no signal right now. Scans will be saved on this phone.');
+        if (OFFLINE_MODE) {
+          setModeBar('off', 'cannot reach Google right now. Scans will be saved on this phone and sent when it can. (If you DO have signal, check FAST_EXEC_URL and that the Fast scan deployment access is "Anyone".)');
           setOnline(false);
         } else {
           setModeBar('off', 'cannot reach the Fast scan deployment. Check its access is "Anyone" (not "Anyone within cru.org.sg" or "Anyone with Google account"), and that FAST_EXEC_URL is its /exec link. Using classic mode for now.');
         }
       } else if (!r.json || !r.json.ok) {
-        fastOk = false; setModeBar('off', 'unexpected reply. Is Code.gs updated and the Fast scan deployment on a New version? Using classic mode for now.');
+        fastOk = false; fastBadSetup = true; setModeBar('off', 'unexpected reply. Is Code.gs updated and the Fast scan deployment on a New version? Using classic mode for now.');
       } else if (!r.json.keyOk) {
-        fastOk = false; setModeBar('off', 'SCAN_KEY here does not match SCAN_KEY in Code.gs. Using classic mode for now.');
+        fastOk = false; fastBadSetup = true; setModeBar('off', 'SCAN_KEY here does not match SCAN_KEY in Code.gs. Using classic mode for now.');
       } else {
         fastOk = true; fastEverOk = true; setModeBar('on'); setOnline(true);
       }
