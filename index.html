@@ -7,7 +7,8 @@
 <title>Event Check-In Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <!--
-  ScannerStandalone.html  (v2.11, Oct 2026)  -> upload to GitHub as index.html
+  ScannerStandalone.html  (v2.12, Oct 2026)  -> upload to GitHub as index.html
+  NEW in v2.12: beep sounds (BEEP_ON). Tap the blue button once per page open.
   NEW in v2.11: OFFLINE MODE. If the phone loses signal, scans are saved on
   the phone (grey "SAVED OFFLINE" card, red bar at the top) and sent to the
   sheet by themselves when the signal comes back. Needs fast mode
@@ -30,6 +31,7 @@
   #manualBox{display:none;max-width:420px;margin:12px auto 0;}
   #manualBox input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#fff;font-size:14px;}
   #manualBox button{margin-top:8px;padding:10px 18px;border-radius:8px;border:none;background:#2563eb;color:#fff;font-size:14px;font-weight:600;}
+  #beepBtn{display:none;margin:0 auto 10px;padding:10px 18px;background:#2563eb;color:#fff;border:none;border-radius:20px;font-size:14px;font-weight:600;}
   #soundBtn{display:none;margin:0 auto 10px;padding:8px 16px;background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:18px;font-size:13px;}
   #modeBar{max-width:420px;margin:0 auto 10px;font-size:12px;color:#999;}
   #modeBar.on{color:#4ade80;} #modeBar.off{color:#fbbf24;}
@@ -58,6 +60,7 @@
     <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
     <button onclick="saveStaff()">Save</button>
   </div>
+  <button id="beepBtn" onclick="unlockBeep()">🔔 Tap once to turn on scan sounds</button>
   <button id="soundBtn" onclick="unlockSound()">🔊 Tap once to turn on voice</button>
   <div id="reader"></div>
   <div id="result" class="idle">Point the camera at a participant's QR code.</div>
@@ -86,6 +89,10 @@
 
   // Voice: false = silent (text + vibration only). Set true to turn voice back on.
   var VOICE_ON = false;
+
+  // Beep sounds: high "beep" = success, two beeps = already checked in,
+  // low buzz = error, soft tone = saved offline. false = no sounds.
+  var BEEP_ON = true;
 
   // Offline mode: true = save scans on the phone when there is no signal.
   var OFFLINE_MODE = true;
@@ -204,6 +211,54 @@
 
   function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) {} }
 
+  // ---- Beep sounds (Web Audio, no sound files needed) ----
+  // Phones only allow sound after one real tap on the page, so a blue
+  // "Tap once to turn on scan sounds" button shows until sound is unlocked.
+  // Any tap on the page also unlocks it.
+  var audioCtx = null, beepReady = false;
+  function unlockBeep() {
+    if (!BEEP_ON) return;
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      // play a silent blip so iOS fully unlocks
+      var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      g.gain.value = 0.0001; o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime + 0.02);
+      beepReady = true;
+    } catch (e) {}
+    var b = document.getElementById('beepBtn');
+    if (b && beepReady) b.style.display = 'none';
+  }
+  function tone(freq, start, dur, type, vol) {
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = type || 'sine'; o.frequency.value = freq;
+    var t0 = audioCtx.currentTime + start;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol || 0.35, t0 + 0.01);
+    g.gain.setValueAtTime(vol || 0.35, t0 + dur - 0.03);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  function beep(kind) {
+    if (!BEEP_ON || !audioCtx) return;
+    try {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      if (kind === 'ok') { tone(1320, 0, 0.15, 'square', 0.2); }
+      else if (kind === 'warn') { tone(880, 0, 0.12, 'square', 0.2); tone(880, 0.18, 0.12, 'square', 0.2); }
+      else if (kind === 'err') { tone(200, 0, 0.45, 'sawtooth', 0.3); }
+      else if (kind === 'saved') { tone(660, 0, 0.2, 'sine', 0.35); }
+      else if (kind === 'dup') { tone(660, 0, 0.1, 'sine', 0.35); tone(660, 0.15, 0.1, 'sine', 0.35); }
+    } catch (e) {}
+  }
+  // Sound + vibration together
+  function feedback(kind) {
+    beep(kind);
+    buzz({ ok: 120, warn: [80, 60, 80], err: [200, 80, 200], saved: [40, 40, 40, 40, 40], dup: [60, 60, 60] }[kind] || 100);
+  }
+  ['touchstart', 'click'].forEach(function (ev) { document.addEventListener(ev, unlockBeep, { passive: true }); });
+
   function stopCameraSafely() {
     try { if (html5Qrcode) { html5Qrcode.stop().catch(function () {}); } } catch (e) {}
   }
@@ -226,7 +281,7 @@
       saveQueue(q);
     }
     showSavedOffline(token, dup);
-    buzz(dup ? [60, 60, 60] : [40, 40, 40, 40, 40]);
+    feedback(dup ? 'dup' : 'saved');
   }
 
   // ---- Network status bar ----
@@ -428,14 +483,14 @@
     if (res.success && res.alreadyChecked) {
       showAlreadyChecked(res.name, res.time);
       speak(WARN_ANNOUNCEMENT);
-      buzz([80, 60, 80]);
+      feedback('warn');
     } else if (res.success) {
       showSuccess(res.name, res.regId);
       speak(SUCCESS_ANNOUNCEMENT);
-      buzz(120);
+      feedback('ok');
     } else {
       showResult('err', escapeHtml(res.message || 'Not recognized'));
-      buzz([200, 80, 200]);
+      feedback('err');
     }
   }
 
@@ -515,6 +570,7 @@
     }
     if (r) history.replaceState(null, '', window.location.pathname);
 
+    if (BEEP_ON) document.getElementById('beepBtn').style.display = 'block';
     renderNetBar();
     busy = true; // hold scans until we know which mode to use
     checkFastMode(function () {
