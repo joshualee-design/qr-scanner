@@ -56,7 +56,7 @@
   <div id="modeBar"></div>
   <div id="netBar"></div>
   <div id="staffBox">
-    <p>Enter your staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan. (If you are signed in to your Cru Google account, that email is used.)</p>
+    <p><b>Required before scanning:</b> enter your staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan.</p>
     <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
     <button onclick="saveStaff()">Save</button>
   </div>
@@ -119,15 +119,27 @@
   var lastCode = '', lastCodeAt = 0;
 
   // ---- Scanning Staff email (saved on this device) ----
+  // The email is kept in memory too, in case this browser blocks saving
+  // (e.g. private / incognito / "secret" mode).
+  var memStaff = '';
+  function isEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || '')); }
   function getStaff() {
-    try { return localStorage.getItem(STAFF_KEY) || ''; } catch (e) { return ''; }
+    var v = '';
+    try { v = localStorage.getItem(STAFF_KEY) || ''; } catch (e) {}
+    return v || memStaff;
+  }
+  function setStaff(v) {
+    v = String(v || '').trim().toLowerCase();
+    memStaff = v;
+    try { localStorage.setItem(STAFF_KEY, v); } catch (e) {}
   }
   function saveStaff() {
     var v = document.getElementById('staffInput').value.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { alert('Please enter a valid email.'); return; }
-    try { localStorage.setItem(STAFF_KEY, v); } catch (e) {}
+    if (!isEmail(v)) { alert('Please enter a valid email.'); return; }
+    setStaff(v);
     document.getElementById('staffBox').style.display = 'none';
     renderStaffBar();
+    if (document.getElementById('result').className === 'err') showResult('idle', 'Thank you. Point the camera at a participant\'s QR code.');
   }
   function changeStaff() {
     document.getElementById('staffInput').value = getStaff();
@@ -387,6 +399,15 @@
     if (!token || busy) return;
     var now = Date.now();
     if (token === lastCode && now - lastCodeAt < SAME_CODE_PAUSE_MS) return; // same QR still in front of camera
+    // No scanning until the staff email is set, so every check-in records
+    // who scanned it (never "unknown").
+    if (!isEmail(getStaff())) {
+      document.getElementById('staffBox').style.display = 'block';
+      showResult('err', 'Please enter your staff email at the top first, then scan again.');
+      feedback('err');
+      try { document.getElementById('staffInput').focus(); } catch (e) {}
+      return;
+    }
     lastCode = token; lastCodeAt = now;
     busy = true;
 
@@ -558,6 +579,9 @@
     }
     var params = new URLSearchParams(window.location.search);
     var r = params.get('r');
+    // Personal link: ...qr-scanner/?staff=name@cru.org.sg saves the email for them.
+    var linkStaff = params.get('staff');
+    if (linkStaff && isEmail(linkStaff)) { setStaff(linkStaff); document.getElementById('staffBox').style.display = 'none'; renderStaffBar(); }
 
     if (r === 'ok') {
       showSuccess(params.get('name') || '');
@@ -568,7 +592,7 @@
     } else if (r === 'err') {
       showResult('err', escapeHtml(params.get('msg') || 'Not recognized'));
     }
-    if (r) history.replaceState(null, '', window.location.pathname);
+    if (r || linkStaff) history.replaceState(null, '', window.location.pathname);
 
     if (BEEP_ON) document.getElementById('beepBtn').style.display = 'block';
     renderNetBar();
