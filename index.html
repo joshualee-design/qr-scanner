@@ -7,7 +7,7 @@
 <title>Event Check-In Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <!--
-  index.html = the scanner page (v2.14, Oct 2026). v2.14: only @cru.org.sg staff can scan. Upload to GitHub qr-scanner as is.
+  index.html = the scanner page (v2.15, Oct 2026). v2.15: connection details + Test connection link. v2.14: only @cru.org.sg staff can scan. Upload to GitHub qr-scanner as is.
   NEW in v2.12: beep sounds (BEEP_ON). Tap the blue button once per page open.
   NEW in v2.11: OFFLINE MODE. If the phone loses signal, scans are saved on
   the phone (grey "SAVED OFFLINE" card, red bar at the top) and sent to the
@@ -105,7 +105,7 @@
 
   var SHOW_RESULT_MS = 1500;     // how long the result shows before the next scan is accepted
   var SAME_CODE_PAUSE_MS = 5000; // ignore the same QR for this long (it is often still in view)
-  var SCAN_TIMEOUT_MS = 8000;    // no reply after this long = treat as no signal, save offline
+  var SCAN_TIMEOUT_MS = 10000;    // no reply after this long = treat as no signal, save offline
   var HEARTBEAT_MS = 10000;      // how often to check the connection
   var SYNC_BATCH = 10;           // saved scans sent per request
   var SUCCESS_ANNOUNCEMENT = 'Registration successful! Please proceed to the next counter, thank you.';
@@ -339,21 +339,45 @@
 
   // Ping the Fast scan deployment. Tells us if the internet really works
   // (a phone can show Wi-Fi bars with no internet behind them).
+  // lastPingInfo explains the last failure in plain words (shown on screen
+  // and by the "Test connection" link) so problems can be diagnosed.
+  var lastPingInfo = '';
   function ping(timeoutMs) {
     return new Promise(function (resolve) {
       if (!FAST_EXEC_URL) return resolve({ reach: false });
-      var done = false;
-      var t = setTimeout(function () { if (!done) { done = true; resolve({ reach: false }); } }, timeoutMs || 6000);
+      var done = false, started = Date.now();
+      var finish = function (res, info) { if (done) return; done = true; clearTimeout(t); lastPingInfo = info || ''; resolve(res); };
+      var t = setTimeout(function () { finish({ reach: false }, 'no reply within ' + Math.round((timeoutMs || 6000) / 1000) + ' s'); }, timeoutMs || 6000);
       fetch(fastUrl() + '?action=ping&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now(), { cache: 'no-store', redirect: 'follow' })
-        .then(function (r) { return r.json(); })
-        .then(function (j) { if (!done) { done = true; clearTimeout(t); resolve({ reach: true, json: j }); } })
-        .catch(function () { if (!done) { done = true; clearTimeout(t); resolve({ reach: false }); } });
+        .then(function (r) { return r.text().then(function (txt) { return { status: r.status, txt: txt }; }); })
+        .then(function (o) {
+          var j = null;
+          try { j = JSON.parse(o.txt); } catch (e) {}
+          if (j) finish({ reach: true, json: j }, 'OK in ' + ((Date.now() - started) / 1000).toFixed(1) + ' s');
+          else finish({ reach: true, json: null }, 'Google answered (HTTP ' + o.status + ') but not with scanner data: "' +
+            String(o.txt).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) + '"');
+        })
+        .catch(function (err) { finish({ reach: false }, 'browser could not connect (' + ((err && err.message) || err) + ')'); });
+    });
+  }
+
+  // "Test connection" link under the mode bar: shows exactly what happens.
+  function testConnection() {
+    var bar = document.getElementById('modeBar');
+    bar.textContent = 'Testing connection to Google (up to 20 s)...';
+    ping(20000).then(function (r) {
+      var ok = r.reach && r.json && r.json.ok;
+      if (ok && r.json.keyOk) { fastOk = true; fastEverOk = true; fastBadSetup = false; setModeBar('on'); setOnline(true); }
+      else setModeBar('off', 'test failed.');
+      alert((ok ? (r.json.keyOk ? 'Connection OK. ' : 'Connected, but SCAN_KEY does not match Code.gs. ') : 'Connection FAILED. ') +
+        lastPingInfo + (r.json && r.json.version ? '\nServer version: ' + r.json.version : '') +
+        '\n\nLink used:\n' + fastUrl());
     });
   }
 
   function heartbeat() {
     if (!FAST_EXEC_URL) return;
-    ping(6000).then(function (r) {
+    ping(12000).then(function (r) {
       if (r.reach && r.json && r.json.ok && r.json.keyOk) {
         if (!fastOk) { fastOk = true; fastBadSetup = false; setModeBar('on'); }
         fastEverOk = true;
@@ -452,14 +476,19 @@
     if (state === 'classic') { bar.className = 'off'; bar.textContent = 'Mode: classic (tap "Scan Next" after each scan). To scan without Scan Next, fill in FAST_EXEC_URL (setup guide 7b).'; }
     else if (state === 'checking') { bar.className = ''; bar.textContent = 'Checking fast mode...'; }
     else if (state === 'on') { bar.className = 'on'; bar.textContent = '⚡ Fast mode ON (no "Scan Next" needed)'; }
-    else { bar.className = 'off'; bar.textContent = 'Fast mode OFF: ' + why; }
+    else {
+      bar.className = 'off';
+      bar.innerHTML = escapeHtml('Fast mode OFF: ' + why) +
+        (lastPingInfo ? '<br><span style="font-size:11px;color:#ccc;">Details: ' + escapeHtml(lastPingInfo) + '</span>' : '') +
+        ' <a href="#" onclick="testConnection();return false;" style="color:#6ab7ff;">Test connection</a>';
+    }
   }
 
   // On page load, check that fast mode really works, and say so on screen.
   function checkFastMode(done) {
     if (!FAST_EXEC_URL) { setModeBar('classic'); return done(); }
     setModeBar('checking');
-    ping(10000).then(function (r) {
+    ping(15000).then(function (r) {
       if (!r.reach) {
         fastOk = false;
         if (OFFLINE_MODE) {
