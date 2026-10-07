@@ -7,7 +7,7 @@
 <title>Event Check-In Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <!--
-  ScannerStandalone.html  (v2.12, Oct 2026)  -> upload to GitHub as index.html
+  index.html = the scanner page (v2.14, Oct 2026). v2.14: only @cru.org.sg staff can scan. Upload to GitHub qr-scanner as is.
   NEW in v2.12: beep sounds (BEEP_ON). Tap the blue button once per page open.
   NEW in v2.11: OFFLINE MODE. If the phone loses signal, scans are saved on
   the phone (grey "SAVED OFFLINE" card, red bar at the top) and sent to the
@@ -56,8 +56,8 @@
   <div id="modeBar"></div>
   <div id="netBar"></div>
   <div id="staffBox">
-    <p><b>Required before scanning:</b> enter your staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan.</p>
-    <input id="staffInput" type="email" placeholder="yourname@cru.org.sg" autocomplete="email">
+    <p><b>Required before scanning:</b> enter your <b>@cru.org.sg</b> staff email once. It is saved on this phone and recorded as the <b>Scanning Staff</b> for each scan.</p>
+    <input id="staffInput" type="email" placeholder="yourname@cru.org.sg (Cru staff only)" autocomplete="email">
     <button onclick="saveStaff()">Save</button>
   </div>
   <button id="beepBtn" onclick="unlockBeep()">🔔 Tap once to turn on scan sounds</button>
@@ -94,6 +94,12 @@
   // low buzz = error, soft tone = saved offline. false = no sounds.
   var BEEP_ON = true;
 
+  // Only staff emails ending with this domain can scan (must match
+  // SCAN_STAFF_DOMAIN in Code.gs). Add exceptions to EXTRA_SCAN_STAFF in BOTH
+  // files. Set '' to allow any email.
+  var STAFF_DOMAIN = 'cru.org.sg';
+  var EXTRA_SCAN_STAFF = [];
+
   // Offline mode: true = save scans on the phone when there is no signal.
   var OFFLINE_MODE = true;
 
@@ -123,6 +129,12 @@
   // (e.g. private / incognito / "secret" mode).
   var memStaff = '';
   function isEmail(v) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || '')); }
+  function staffOk(v) {
+    v = String(v || '').trim().toLowerCase();
+    if (!isEmail(v)) return false;
+    if (EXTRA_SCAN_STAFF.some(function (e) { return String(e).trim().toLowerCase() === v; })) return true;
+    return !STAFF_DOMAIN || v.slice(-(STAFF_DOMAIN.length + 1)) === '@' + STAFF_DOMAIN;
+  }
   function getStaff() {
     var v = '';
     try { v = localStorage.getItem(STAFF_KEY) || ''; } catch (e) {}
@@ -136,6 +148,7 @@
   function saveStaff() {
     var v = document.getElementById('staffInput').value.trim().toLowerCase();
     if (!isEmail(v)) { alert('Please enter a valid email.'); return; }
+    if (!staffOk(v)) { alert('Only Cru staff can scan. Please use your @' + STAFF_DOMAIN + ' email.'); return; }
     setStaff(v);
     document.getElementById('staffBox').style.display = 'none';
     renderStaffBar();
@@ -401,9 +414,9 @@
     if (token === lastCode && now - lastCodeAt < SAME_CODE_PAUSE_MS) return; // same QR still in front of camera
     // No scanning until the staff email is set, so every check-in records
     // who scanned it (never "unknown").
-    if (!isEmail(getStaff())) {
+    if (!staffOk(getStaff())) {
       document.getElementById('staffBox').style.display = 'block';
-      showResult('err', 'Please enter your staff email at the top first, then scan again.');
+      showResult('err', 'Please enter your @' + (STAFF_DOMAIN || 'staff') + ' email at the top first, then scan again.');
       feedback('err');
       try { document.getElementById('staffInput').focus(); } catch (e) {}
       return;
@@ -581,7 +594,7 @@
     var r = params.get('r');
     // Personal link: ...qr-scanner/?staff=name@cru.org.sg saves the email for them.
     var linkStaff = params.get('staff');
-    if (linkStaff && isEmail(linkStaff)) { setStaff(linkStaff); document.getElementById('staffBox').style.display = 'none'; renderStaffBar(); }
+    if (linkStaff && staffOk(linkStaff)) { setStaff(linkStaff); document.getElementById('staffBox').style.display = 'none'; renderStaffBar(); }
 
     if (r === 'ok') {
       showSuccess(params.get('name') || '');
