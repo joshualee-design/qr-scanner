@@ -7,7 +7,7 @@
 <title>Event Check-In Scanner</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 <!--
-  index.html = the scanner page (v2.15, Oct 2026). v2.15: connection details + Test connection link. v2.14: only @cru.org.sg staff can scan. Upload to GitHub qr-scanner as is.
+  index.html = the scanner page (v2.16, Oct 2026). v2.16: sends how each scan was made (camera / typed). v2.15: connection details + Test connection link. v2.14: only @cru.org.sg staff can scan. Upload to GitHub qr-scanner as is.
   NEW in v2.12: beep sounds (BEEP_ON). Tap the blue button once per page open.
   NEW in v2.11: OFFLINE MODE. If the phone loses signal, scans are saved on
   the phone (grey "SAVED OFFLINE" card, red bar at the top) and sent to the
@@ -298,11 +298,11 @@
     catch (e) { memQueue = q; } // storage blocked: keep in memory (lost if the page closes)
     renderNetBar();
   }
-  function queueScan(token) {
+  function queueScan(token, via) {
     var q = loadQueue();
     var dup = q.some(function (it) { return it.token.toUpperCase() === token.toUpperCase(); });
     if (!dup) {
-      q.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), token: token, staff: getStaff(), at: Date.now() });
+      q.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), token: token, staff: getStaff(), at: Date.now(), via: via || 'camera' });
       saveQueue(q);
     }
     showSavedOffline(token, dup);
@@ -431,7 +431,9 @@
   var syncTotals = { ok: 0, problems: 0 };
 
   // ---- Scanning ----
-  function goMark(token) {
+  // via: 'camera' (default) or 'typed' (Registration ID typed by hand)
+  function goMark(token, via) {
+    via = via === 'typed' ? 'typed' : 'camera';
     token = String(token || '').trim();
     if (!token || busy) return;
     var now = Date.now();
@@ -451,7 +453,7 @@
     var canOffline = OFFLINE_MODE && FAST_EXEC_URL;
     if (canOffline && (!online || (navigator.onLine === false))) {
       if (navigator.onLine === false) setOnline(false);
-      queueScan(token);
+      queueScan(token, via);
       setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
       return;
     }
@@ -459,9 +461,9 @@
     // answered but the setup is wrong. With offline mode on, a scan is never
     // sent by page redirect when Google can't be reached (that would lose the
     // scanner page); it tries in the background and saves it if no reply.
-    if (!FAST_EXEC_URL || fastBadSetup || (!OFFLINE_MODE && !fastOk)) { showResult('idle', 'Checking...'); redirectMark(token); return; }
+    if (!FAST_EXEC_URL || fastBadSetup || (!OFFLINE_MODE && !fastOk)) { showResult('idle', 'Checking...'); redirectMark(token, via); return; }
     showResult('idle', 'Checking...');
-    fastMark(token);
+    fastMark(token, via);
   }
 
   // Fast mode: ask the backend in the background. The camera keeps running.
@@ -508,9 +510,9 @@
     });
   }
 
-  function fastMark(token) {
+  function fastMark(token, via) {
     var url = fastUrl() + '?action=markjson&token=' + encodeURIComponent(token) +
-      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) + '&t=' + Date.now();
+      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) + '&via=' + via + '&t=' + Date.now();
     var finished = false;
     var timer = setTimeout(function () { if (!finished) { finished = true; noReply('timeout'); } }, SCAN_TIMEOUT_MS);
     fetch(url, { method: 'GET', cache: 'no-store', redirect: 'follow' })
@@ -533,10 +535,10 @@
       try { console.log('Fast mode failed:', why); } catch (e) {}
       if (OFFLINE_MODE) {
         setOnline(false);
-        queueScan(token);
+        queueScan(token, via);
         setTimeout(function () { busy = false; }, SHOW_RESULT_MS);
       } else {
-        redirectMark(token);
+        redirectMark(token, via);
       }
     }
   }
@@ -558,11 +560,11 @@
   }
 
   // Classic mode: full-page redirect to the backend, then "Scan Next" back.
-  function redirectMark(token) {
+  function redirectMark(token, via) {
     var returnUrl = window.location.origin + window.location.pathname;
     stopCameraSafely();
     var url = SCRIPT_EXEC_URL + '?action=mark&token=' + encodeURIComponent(token) +
-      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) +
+      '&staff=' + encodeURIComponent(getStaff()) + '&key=' + encodeURIComponent(SCAN_KEY) + '&via=' + (via || 'camera') +
       '&return=' + encodeURIComponent(returnUrl);
     leavingOnPurpose = true;
     window.location.href = url;
@@ -596,7 +598,7 @@
     var val = document.getElementById('manualInput').value.trim();
     if (!val) return;
     lastCode = ''; // allow typing the same ID again on purpose
-    goMark(val);
+    goMark(val, 'typed');
     document.getElementById('manualInput').value = '';
   }
 
